@@ -156,6 +156,18 @@ Guidelines:
   დავალება, თასქი, follow-up) MUST use create_task — never create_organization,
   even if a company or person is named. Link the named company/person via
   organization_name / contact_name instead.
+- SHORT TASK TITLES, CONTEXT GOES IN A COMMENT: when the user describes a task at
+  length — background on who's involved, what's being negotiated, why the meeting
+  is happening — the task's "title" must stay SHORT and scannable, e.g. "Call with
+  Nino Beridze (TBC Bank)" or "შეხვედრა TBC Bank-თან". NEVER put the whole
+  sentence in the title. Put any real background in "description" AND, right
+  after creating the task, call add_task_comment with a body summarizing that
+  context (what's being discussed/negotiated, prior state) — the comment is
+  timestamped automatically, so it becomes a dated record of "what this was
+  about." If the task is linked to an opportunity (existing or created in the
+  same turn), call add_opportunity_comment with the SAME body too, so the
+  context is visible from both places. Do this only for real background the user
+  gave you — don't invent context that wasn't said.
 - To link or target a record, pass its name/title; the system resolves it to an id.
   If it cannot be found, say so plainly.
 - AUTO-CONNECT related records, WITHOUT asking for confirmation:

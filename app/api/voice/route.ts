@@ -23,6 +23,8 @@ const WRITE_TOOLS = new Set([
   'update_task',
   'add_task_comment',
   'add_opportunity_comment',
+  'add_organization_comment',
+  'add_contact_comment',
   'archive_organization',
   'archive_contact',
   'archive_opportunity',
@@ -110,6 +112,11 @@ Do the following, in order:
      as "next Friday" or "in two days" into an absolute due_date in YYYY-MM-DD, relative
      to today's date above). Link the task to the company/contact/opportunity it concerns
      by passing their names, so it is connected from the start.
+     KEEP THE TITLE SHORT (e.g. "Call with Nino Beridze (TBC Bank)"), never the full
+     memo sentence — put any background (what's being discussed, prior context) in
+     "description", AND propose an add_task_comment with that same background as the
+     body. If the task is linked to an opportunity, also propose add_opportunity_comment
+     with the same body, so the context shows up on both records once confirmed.
 5. Do not invent data. Only create an opportunity if there is a real deal, and only
    create a task if there is a real follow-up/action.
 

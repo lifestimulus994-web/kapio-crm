@@ -1,9 +1,10 @@
 import Link from 'next/link'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
-import type { Contact, Opportunity, Organization, Task } from '@/types'
+import type { Contact, Opportunity, Organization, Task, ContactComment } from '@/types'
 import { ChevronLeft, Mail, Phone, Briefcase, Building2, Pencil } from 'lucide-react'
 import { formatCurrency, formatDate, fullName } from '@/lib/utils'
+import CommentThread from '@/components/CommentThread'
 
 export const dynamic = 'force-dynamic'
 
@@ -24,7 +25,7 @@ export default async function ContactDetailPage({
 }) {
   const { id } = await params
 
-  const [contactRes, oppsRes, tasksRes, orgsRes] = await Promise.all([
+  const [contactRes, oppsRes, tasksRes, orgsRes, commentsRes] = await Promise.all([
     supabase
       .from('contacts')
       .select('*, organization:organizations(id, name)')
@@ -41,6 +42,11 @@ export default async function ContactDetailPage({
       .eq('contact_id', id)
       .order('due_date'),
     supabase.from('organizations').select('id, name').order('name'),
+    supabase
+      .from('contact_comments')
+      .select('*')
+      .eq('contact_id', id)
+      .order('created_at', { ascending: true }),
   ])
 
   if (contactRes.error || !contactRes.data) {
@@ -51,6 +57,9 @@ export default async function ContactDetailPage({
   const opportunities = (oppsRes.data ?? []) as Opportunity[]
   const tasks = (tasksRes.data ?? []) as Task[]
   const orgs = (orgsRes.data ?? []) as Pick<Organization, 'id' | 'name'>[]
+  // If the comments table isn't migrated yet, degrade gracefully.
+  const comments = (commentsRes.error ? [] : commentsRes.data ?? []) as ContactComment[]
+  const commentsReady = !commentsRes.error
 
   async function updateOrganization(formData: FormData) {
     'use server'
@@ -63,6 +72,18 @@ export default async function ContactDetailPage({
     if (error) throw new Error(error.message)
     revalidatePath(`/contacts/${id}`)
     revalidatePath('/contacts')
+  }
+
+  async function addComment(formData: FormData) {
+    'use server'
+    const body = (formData.get('body') as string)?.trim()
+    if (!body) return
+    const author = (formData.get('author') as string)?.trim() || 'You'
+    const { error } = await supabase
+      .from('contact_comments')
+      .insert({ contact_id: id, author, body })
+    if (error) throw new Error(error.message)
+    revalidatePath(`/contacts/${id}`)
   }
 
   const info = [
@@ -238,6 +259,14 @@ export default async function ContactDetailPage({
           </p>
         </div>
       )}
+
+      <div className="mt-5">
+        <CommentThread
+          comments={comments}
+          commentsReady={commentsReady}
+          addComment={addComment}
+        />
+      </div>
     </div>
   )
 }

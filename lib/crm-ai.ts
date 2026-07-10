@@ -730,6 +730,46 @@ export const tools: FunctionDeclaration[] = [
       required: ['opportunity_title', 'body'],
     },
   },
+  {
+    name: 'add_organization_comment',
+    description:
+      'Add a comment / activity-log entry to an existing organization (company), found by its name. The comment is timestamped automatically.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        organization_name: {
+          type: Type.STRING,
+          description: 'Name of the company to comment on (required).',
+        },
+        body: { type: Type.STRING, description: 'The comment text (required).' },
+        author: {
+          type: Type.STRING,
+          description: 'Who is leaving the comment (optional, defaults to "AI Assistant").',
+        },
+      },
+      required: ['organization_name', 'body'],
+    },
+  },
+  {
+    name: 'add_contact_comment',
+    description:
+      'Add a comment / activity-log entry to an existing contact (person), found by their name. The comment is timestamped automatically.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        contact_name: {
+          type: Type.STRING,
+          description: 'Full name of the contact to comment on (required).',
+        },
+        body: { type: Type.STRING, description: 'The comment text (required).' },
+        author: {
+          type: Type.STRING,
+          description: 'Who is leaving the comment (optional, defaults to "AI Assistant").',
+        },
+      },
+      required: ['contact_name', 'body'],
+    },
+  },
 ]
 
 // Logs an unexpected tool-call failure (a thrown error, not an ordinary
@@ -1173,6 +1213,46 @@ async function runToolInner(
       .single()
     if (error) return { success: false, error: error.message }
     revalidatePath(`/opportunities/${oppId}`)
+    return { success: true, created: data }
+  }
+
+  if (name === 'add_organization_comment') {
+    const orgId = await resolveOrgId(str(args.organization_name) ?? undefined)
+    if (!orgId)
+      return { success: false, error: `Company "${args.organization_name}" not found.` }
+    const body = str(args.body)
+    if (!body) return { success: false, error: 'Comment body is required.' }
+    const { data, error } = await supabase
+      .from('organization_comments')
+      .insert({
+        organization_id: orgId,
+        author: str(args.author) ?? 'AI Assistant',
+        body,
+      })
+      .select('id, author, body, created_at')
+      .single()
+    if (error) return { success: false, error: error.message }
+    revalidatePath(`/organizations/${orgId}`)
+    return { success: true, created: data }
+  }
+
+  if (name === 'add_contact_comment') {
+    const contactId = await resolveContactId(str(args.contact_name) ?? undefined)
+    if (!contactId)
+      return { success: false, error: `Contact "${args.contact_name}" not found.` }
+    const body = str(args.body)
+    if (!body) return { success: false, error: 'Comment body is required.' }
+    const { data, error } = await supabase
+      .from('contact_comments')
+      .insert({
+        contact_id: contactId,
+        author: str(args.author) ?? 'AI Assistant',
+        body,
+      })
+      .select('id, author, body, created_at')
+      .single()
+    if (error) return { success: false, error: error.message }
+    revalidatePath(`/contacts/${contactId}`)
     return { success: true, created: data }
   }
 

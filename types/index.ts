@@ -99,3 +99,19 @@ export type OpportunityComment = {
   body: string
   created_at: string
 }
+
+export type OrganizationComment = {
+  id: string
+  organization_id: string
+  author: string
+  body: string
+  created_at: string
+}
+
+export type ContactComment = {
+  id: string
+  contact_id: string
+  author: string
+  body: string
+  created_at: string
+}

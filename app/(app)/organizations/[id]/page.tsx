@@ -1,7 +1,8 @@
 import Link from 'next/link'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
-import type { Organization, Contact, Opportunity, Task } from '@/types'
+import type { Organization, Contact, Opportunity, Task, OrganizationComment } from '@/types'
+import CommentThread from '@/components/CommentThread'
 import {
   ChevronLeft,
   Building2,
@@ -33,7 +34,7 @@ export default async function OrganizationDetailPage({
 }) {
   const { id } = await params
 
-  const [orgRes, contactsRes, oppsRes, tasksRes, freeContactsRes] =
+  const [orgRes, contactsRes, oppsRes, tasksRes, freeContactsRes, commentsRes] =
     await Promise.all([
       supabase.from('organizations').select('*').eq('id', id).single(),
       supabase
@@ -56,6 +57,11 @@ export default async function OrganizationDetailPage({
         .select('id, first_name, last_name')
         .is('organization_id', null)
         .order('first_name'),
+      supabase
+        .from('organization_comments')
+        .select('*')
+        .eq('organization_id', id)
+        .order('created_at', { ascending: true }),
     ])
 
   if (orgRes.error || !orgRes.data) {
@@ -72,6 +78,9 @@ export default async function OrganizationDetailPage({
     Contact,
     'id' | 'first_name' | 'last_name'
   >[]
+  // If the comments table isn't migrated yet, degrade gracefully.
+  const comments = (commentsRes.error ? [] : commentsRes.data ?? []) as OrganizationComment[]
+  const commentsReady = !commentsRes.error
 
   async function attachContact(formData: FormData) {
     'use server'
@@ -84,6 +93,18 @@ export default async function OrganizationDetailPage({
     if (error) throw new Error(error.message)
     revalidatePath(`/organizations/${id}`)
     revalidatePath('/contacts')
+  }
+
+  async function addComment(formData: FormData) {
+    'use server'
+    const body = (formData.get('body') as string)?.trim()
+    if (!body) return
+    const author = (formData.get('author') as string)?.trim() || 'You'
+    const { error } = await supabase
+      .from('organization_comments')
+      .insert({ organization_id: id, author, body })
+    if (error) throw new Error(error.message)
+    revalidatePath(`/organizations/${id}`)
   }
 
   const info = [
@@ -304,6 +325,14 @@ export default async function OrganizationDetailPage({
           </p>
         </div>
       )}
+
+      <div className="mt-5">
+        <CommentThread
+          comments={comments}
+          commentsReady={commentsReady}
+          addComment={addComment}
+        />
+      </div>
     </div>
   )
 }

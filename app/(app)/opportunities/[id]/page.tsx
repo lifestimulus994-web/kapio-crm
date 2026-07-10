@@ -1,7 +1,8 @@
 import Link from 'next/link'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
-import { STAGES, type Opportunity, type Task } from '@/types'
+import { STAGES, type Opportunity, type Task, type OpportunityComment } from '@/types'
+import CommentThread from '@/components/CommentThread'
 import {
   ChevronLeft,
   Pencil,
@@ -41,7 +42,7 @@ export default async function OpportunityDetailPage({
 }) {
   const { id } = await params
 
-  const [oppRes, tasksRes] = await Promise.all([
+  const [oppRes, tasksRes, commentsRes] = await Promise.all([
     supabase
       .from('opportunities')
       .select(
@@ -54,6 +55,11 @@ export default async function OpportunityDetailPage({
       .select('*')
       .eq('opportunity_id', id)
       .order('due_date', { ascending: true }),
+    supabase
+      .from('opportunity_comments')
+      .select('*')
+      .eq('opportunity_id', id)
+      .order('created_at', { ascending: true }),
   ])
 
   if (oppRes.error || !oppRes.data) {
@@ -64,6 +70,9 @@ export default async function OpportunityDetailPage({
   const tasks = (tasksRes.data ?? []) as Task[]
   // The detail fields only exist once the opportunities migration has been run.
   const migrated = 'owner' in opp
+  // If the comments table isn't migrated yet, degrade gracefully.
+  const comments = (commentsRes.error ? [] : commentsRes.data ?? []) as OpportunityComment[]
+  const commentsReady = !commentsRes.error
 
   async function setStage(formData: FormData) {
     'use server'
@@ -76,6 +85,18 @@ export default async function OpportunityDetailPage({
     if (error) throw new Error(error.message)
     revalidatePath(`/opportunities/${id}`)
     revalidatePath('/')
+  }
+
+  async function addComment(formData: FormData) {
+    'use server'
+    const body = (formData.get('body') as string)?.trim()
+    if (!body) return
+    const author = (formData.get('author') as string)?.trim() || 'You'
+    const { error } = await supabase
+      .from('opportunity_comments')
+      .insert({ opportunity_id: id, author, body })
+    if (error) throw new Error(error.message)
+    revalidatePath(`/opportunities/${id}`)
   }
 
   const currentIdx = PATH.indexOf(opp.stage as (typeof PATH)[number])
@@ -304,6 +325,13 @@ export default async function OpportunityDetailPage({
               )}
             </div>
           )}
+
+          <CommentThread
+            comments={comments}
+            commentsReady={commentsReady}
+            addComment={addComment}
+            defaultAuthor={opp.owner ?? ''}
+          />
         </div>
 
         {/* Activities feed */}
