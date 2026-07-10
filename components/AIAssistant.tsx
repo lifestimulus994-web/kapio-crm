@@ -4,7 +4,17 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Bot, Send, X, Sparkles, Mic, Loader2 } from 'lucide-react'
 
-type Message = { role: 'user' | 'model'; text: string }
+type PendingConfirmation = {
+  name: string
+  args: Record<string, unknown>
+  description: string
+}
+type Message = {
+  role: 'user' | 'model'
+  text: string
+  confirmation?: PendingConfirmation
+  resolved?: 'confirmed' | 'cancelled'
+}
 
 const suggestions = [
   'What deals are in Negotiation?',
@@ -118,11 +128,59 @@ export default function AIAssistant() {
       const reply = res.ok
         ? data.reply
         : `⚠️ ${data.error ?? 'Something went wrong.'}`
-      setMessages((m) => [...m, { role: 'model', text: reply }])
+      setMessages((m) => [
+        ...m,
+        {
+          role: 'model',
+          text: reply,
+          confirmation: res.ok ? data.pendingConfirmation : undefined,
+        },
+      ])
       // If the AI created/changed records, refresh the current page's data.
       if (res.ok && Array.isArray(data.actions) && data.actions.length > 0) {
         router.refresh()
       }
+    } catch {
+      setMessages((m) => [
+        ...m,
+        { role: 'model', text: '⚠️ Network error. Is the server running?' },
+      ])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Run (or dismiss) a destructive action the model held for review instead of
+  // executing outright — archive_* tools always land here first.
+  async function resolveConfirmation(index: number, confirmed: boolean) {
+    const msg = messages[index]
+    if (!msg.confirmation) return
+
+    if (!confirmed) {
+      setMessages((m) =>
+        m.map((x, i) => (i === index ? { ...x, resolved: 'cancelled' } : x))
+      )
+      return
+    }
+
+    setLoading(true)
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          confirm: { name: msg.confirmation.name, args: msg.confirmation.args },
+        }),
+      })
+      const data = await res.json()
+      setMessages((m) => [
+        ...m.map((x, i) => (i === index ? { ...x, resolved: 'confirmed' as const } : x)),
+        {
+          role: 'model',
+          text: res.ok ? data.reply : `⚠️ ${data.error ?? 'Something went wrong.'}`,
+        },
+      ])
+      if (res.ok) router.refresh()
     } catch {
       setMessages((m) => [
         ...m,
@@ -198,7 +256,7 @@ export default function AIAssistant() {
             {messages.map((m, i) => (
               <div
                 key={i}
-                className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}
               >
                 <div
                   className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-3.5 py-2 text-sm leading-relaxed ${
@@ -209,6 +267,30 @@ export default function AIAssistant() {
                 >
                   {m.text}
                 </div>
+                {m.confirmation && !m.resolved && (
+                  <div className="mt-1.5 flex items-center gap-2 rounded-xl border border-amber-700/50 bg-amber-950/30 px-3 py-2">
+                    <span className="text-xs text-amber-300">
+                      {m.confirmation.description}
+                    </span>
+                    <button
+                      onClick={() => resolveConfirmation(i, true)}
+                      disabled={loading}
+                      className="rounded-lg bg-red-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-red-500 disabled:opacity-40"
+                    >
+                      Confirm
+                    </button>
+                    <button
+                      onClick={() => resolveConfirmation(i, false)}
+                      disabled={loading}
+                      className="rounded-lg bg-slate-700 px-2.5 py-1 text-xs font-medium text-slate-200 transition-colors hover:bg-slate-600 disabled:opacity-40"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
+                {m.confirmation && m.resolved === 'cancelled' && (
+                  <span className="mt-1 text-[11px] text-slate-500">Cancelled.</span>
+                )}
               </div>
             ))}
 

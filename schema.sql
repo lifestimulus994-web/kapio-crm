@@ -126,3 +126,23 @@ alter table public.members enable row level security;
 drop policy if exists "members can view team" on public.members;
 create policy "members can view team" on public.members
   for select to authenticated using (true);
+
+-- Soft delete: the AI agent (and the UI) archive instead of hard-deleting, so
+-- a misheard name never causes an unrecoverable loss. Archived rows are
+-- excluded from buildContext() and the default list views but stay in the DB.
+alter table public.organizations add column if not exists archived boolean not null default false;
+alter table public.contacts      add column if not exists archived boolean not null default false;
+alter table public.opportunities add column if not exists archived boolean not null default false;
+alter table public.tasks         add column if not exists archived boolean not null default false;
+
+-- Logs unexpected AI tool-call failures (not ordinary "not found" results,
+-- which the tool already returns as a normal {success:false} value) so they
+-- can be reviewed later without relying on short-lived platform logs.
+create table if not exists public.tool_failures (
+  id         uuid primary key default gen_random_uuid(),
+  tool_name  text not null,
+  args       jsonb,
+  error      text not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_tool_failures_created on public.tool_failures(created_at desc);

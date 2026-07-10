@@ -25,18 +25,24 @@ export async function loadKnowledge(): Promise<string> {
 // ---------- CRM context snapshot ----------
 export async function buildContext() {
   const [orgs, contacts, opps, tasks] = await Promise.all([
-    supabase.from('organizations').select('id, name, industry, email, phone'),
+    supabase
+      .from('organizations')
+      .select('id, name, industry, email, phone')
+      .eq('archived', false),
     supabase
       .from('contacts')
-      .select('id, first_name, last_name, job_title, email, organization_id'),
+      .select('id, first_name, last_name, job_title, email, phone, organization_id')
+      .eq('archived', false),
     supabase
       .from('opportunities')
-      .select('id, title, value_gel, stage, organization_id, contact_id'),
+      .select('id, title, value_gel, stage, organization_id, contact_id')
+      .eq('archived', false),
     supabase
       .from('tasks')
       .select(
         'id, title, status, priority, owner, start_date, due_date, start_at, end_at, organization_id, contact_id, opportunity_id'
-      ),
+      )
+      .eq('archived', false),
   ])
   return JSON.stringify({
     organizations: orgs.data ?? [],
@@ -244,6 +250,49 @@ async function resolveOpportunityId(title?: string): Promise<string | null> {
   return hit?.id ?? null
 }
 
+// Exact-name lookup used to dedup creates (a retried request shouldn't insert
+// a second record for the same company/person/deal/task).
+async function findExactOrgId(name: string): Promise<string | null> {
+  const { data } = await supabase
+    .from('organizations')
+    .select('id, name')
+    .ilike('name', name)
+    .limit(1)
+    .maybeSingle()
+  return data?.id ?? null
+}
+async function findExactContactId(
+  firstName: string,
+  lastName: string
+): Promise<string | null> {
+  const { data } = await supabase
+    .from('contacts')
+    .select('id, first_name, last_name')
+    .ilike('first_name', firstName)
+    .ilike('last_name', lastName || '')
+    .limit(1)
+    .maybeSingle()
+  return data?.id ?? null
+}
+async function findExactOpportunityId(title: string): Promise<string | null> {
+  const { data } = await supabase
+    .from('opportunities')
+    .select('id, title')
+    .ilike('title', title)
+    .limit(1)
+    .maybeSingle()
+  return data?.id ?? null
+}
+async function findExactTaskId(title: string): Promise<string | null> {
+  const { data } = await supabase
+    .from('tasks')
+    .select('id, title')
+    .ilike('title', title)
+    .limit(1)
+    .maybeSingle()
+  return data?.id ?? null
+}
+
 async function resolveTaskId(title?: string): Promise<string | null> {
   if (!title) return null
   const { data } = await supabase.from('tasks').select('id, title')
@@ -263,6 +312,17 @@ const STAGES = [
   'Won',
   'Lost',
 ]
+
+// Tools that permanently change what's visible (archive) or that create real
+// login credentials — require an explicit user confirmation before running,
+// never fired straight off a model's tool call. Single source of truth so the
+// chat route and any future caller agree on what counts as destructive.
+export const DESTRUCTIVE_TOOLS = new Set([
+  'archive_organization',
+  'archive_contact',
+  'archive_opportunity',
+  'archive_task',
+])
 
 // ---------- tool definitions ----------
 export const tools: FunctionDeclaration[] = [
@@ -361,6 +421,102 @@ export const tools: FunctionDeclaration[] = [
         },
       },
       required: ['first_name'],
+    },
+  },
+  {
+    name: 'update_contact',
+    description:
+      'Update an EXISTING contact (person), found by their first and last name. Fix a misheard name (set new_first_name/new_last_name), or change job_title/email/phone/notes, or re-link them to a different company. Pass only the fields you want to change.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        first_name: {
+          type: Type.STRING,
+          description: 'Current first name of the contact to update (required — used to find them).',
+        },
+        last_name: {
+          type: Type.STRING,
+          description: 'Current last name of the contact, if known (helps disambiguate).',
+        },
+        new_first_name: { type: Type.STRING },
+        new_last_name: { type: Type.STRING },
+        job_title: { type: Type.STRING },
+        email: { type: Type.STRING },
+        phone: { type: Type.STRING },
+        notes: { type: Type.STRING },
+        organization_name: {
+          type: Type.STRING,
+          description: 'Name of an existing company to LINK this contact to.',
+        },
+      },
+      required: ['first_name'],
+    },
+  },
+  {
+    name: 'get_record',
+    description:
+      "Fetch the FULL details of one organization, contact, opportunity, or task — including fields not present in the live CRM data snapshot above (e.g. an organization's address/notes/legal name, an opportunity's pain_points/next_action/notes, a task's description, or its comments/activity log). Call this whenever a question needs a field that isn't in the snapshot, INSTEAD OF saying you don't have the information.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        entity: {
+          type: Type.STRING,
+          description: "One of: 'organization', 'contact', 'opportunity', 'task'.",
+        },
+        name_or_id: {
+          type: Type.STRING,
+          description: 'The name/title (or id) of the record to fetch.',
+        },
+      },
+      required: ['entity', 'name_or_id'],
+    },
+  },
+  {
+    name: 'archive_organization',
+    description:
+      'Archive (soft-delete) a company, found by its name. Archived records are hidden from view but not permanently destroyed. Use when the user asks to delete/remove a company.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        organization_name: { type: Type.STRING, description: 'Name of the company to archive (required).' },
+      },
+      required: ['organization_name'],
+    },
+  },
+  {
+    name: 'archive_contact',
+    description:
+      'Archive (soft-delete) a contact, found by their name. Archived records are hidden from view but not permanently destroyed. Use when the user asks to delete/remove a contact.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        contact_name: { type: Type.STRING, description: 'Full name of the contact to archive (required).' },
+      },
+      required: ['contact_name'],
+    },
+  },
+  {
+    name: 'archive_opportunity',
+    description:
+      'Archive (soft-delete) a deal, found by its title. Archived records are hidden from view but not permanently destroyed. Use when the user asks to delete/remove/cancel a deal.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        opportunity_title: { type: Type.STRING, description: 'Title of the deal to archive (required).' },
+      },
+      required: ['opportunity_title'],
+    },
+  },
+  {
+    name: 'archive_task',
+    description:
+      'Archive (soft-delete) a task, found by its title. Archived records are hidden from view but not permanently destroyed. Use when the user asks to delete/remove/cancel a task.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        task_title: { type: Type.STRING, description: 'Title of the task to archive (required).' },
+      },
+      required: ['task_title'],
     },
   },
   {
@@ -576,8 +732,45 @@ export const tools: FunctionDeclaration[] = [
   },
 ]
 
+// Logs an unexpected tool-call failure (a thrown error, not an ordinary
+// {success:false} result) so it can be reviewed later — Vercel's own logs
+// don't stick around long enough to debug a one-off complaint from memory.
+async function logToolFailure(
+  toolName: string,
+  args: Record<string, unknown>,
+  error: unknown
+) {
+  try {
+    await supabase.from('tool_failures').insert({
+      tool_name: toolName,
+      args,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  } catch {
+    // Logging must never itself break the request.
+  }
+}
+
 // ---------- tool executor ----------
+// Wraps the real dispatch below in error isolation + failure logging, so one
+// unexpected throw (a network blip, a bad assumption) never crashes the
+// whole chat/voice turn — every call site gets this automatically.
 export async function runTool(
+  name: string,
+  args: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  try {
+    return await runToolInner(name, args)
+  } catch (error) {
+    await logToolFailure(name, args, error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unexpected error.',
+    }
+  }
+}
+
+async function runToolInner(
   name: string,
   args: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
@@ -621,6 +814,15 @@ export async function runTool(
   }
 
   if (name === 'create_organization') {
+    const orgName = str(args.name) ?? 'Untitled'
+    const existingId = await findExactOrgId(orgName)
+    if (existingId) {
+      return {
+        success: true,
+        created: { id: existingId, name: orgName },
+        note: 'already existed, reused',
+      }
+    }
     const { data, error } = await supabase
       .from('organizations')
       .insert({
@@ -691,12 +893,22 @@ export async function runTool(
   }
 
   if (name === 'create_contact') {
+    const firstName = str(args.first_name) ?? 'Unknown'
+    const lastName = str(args.last_name) ?? ''
+    const existingId = await findExactContactId(firstName, lastName)
+    if (existingId) {
+      return {
+        success: true,
+        created: { id: existingId, first_name: firstName, last_name: lastName },
+        note: 'already existed, reused',
+      }
+    }
     const orgId = await resolveOrgId(str(args.organization_name) ?? undefined)
     const { data, error } = await supabase
       .from('contacts')
       .insert({
-        first_name: str(args.first_name) ?? 'Unknown',
-        last_name: str(args.last_name) ?? '',
+        first_name: firstName,
+        last_name: lastName,
         job_title: str(args.job_title),
         email: str(args.email),
         phone: str(args.phone),
@@ -719,6 +931,15 @@ export async function runTool(
   }
 
   if (name === 'create_opportunity') {
+    const title = str(args.title) ?? 'Untitled deal'
+    const existingId = await findExactOpportunityId(title)
+    if (existingId) {
+      return {
+        success: true,
+        created: { id: existingId, title },
+        note: 'already existed, reused',
+      }
+    }
     const [orgId, contactId] = await Promise.all([
       resolveOrgId(str(args.organization_name) ?? undefined),
       resolveContactId(str(args.contact_name) ?? undefined),
@@ -729,7 +950,7 @@ export async function runTool(
     const { data, error } = await supabase
       .from('opportunities')
       .insert({
-        title: str(args.title) ?? 'Untitled deal',
+        title,
         value_gel: num(args.value_gel),
         stage,
         pain_points: str(args.pain_points),
@@ -746,6 +967,15 @@ export async function runTool(
   }
 
   if (name === 'create_task') {
+    const title = str(args.title) ?? 'Untitled task'
+    const existingId = await findExactTaskId(title)
+    if (existingId) {
+      return {
+        success: true,
+        created: { id: existingId, title },
+        note: 'already existed, reused',
+      }
+    }
     const [orgId, contactId, oppId] = await Promise.all([
       resolveOrgId(str(args.organization_name) ?? undefined),
       resolveContactId(str(args.contact_name) ?? undefined),
@@ -773,7 +1003,7 @@ export async function runTool(
     const { data, error } = await supabase
       .from('tasks')
       .insert({
-        title: str(args.title) ?? 'Untitled task',
+        title,
         description: str(args.description),
         start_date: str(args.start_date),
         due_date: str(args.due_date),
@@ -944,6 +1174,153 @@ export async function runTool(
     if (error) return { success: false, error: error.message }
     revalidatePath(`/opportunities/${oppId}`)
     return { success: true, created: data }
+  }
+
+  if (name === 'update_contact') {
+    const target = str(args.first_name)
+    if (!target) return { success: false, error: 'first_name is required to find the contact.' }
+    const fullTarget = `${target} ${str(args.last_name) ?? ''}`.trim()
+    const contactId = await resolveContactId(fullTarget) ?? await resolveContactId(target)
+    if (!contactId)
+      return { success: false, error: `Contact "${fullTarget}" not found.` }
+    const patch: Record<string, unknown> = {}
+    if (str(args.new_first_name)) patch.first_name = str(args.new_first_name)
+    if (str(args.new_last_name)) patch.last_name = str(args.new_last_name)
+    if (str(args.job_title)) patch.job_title = str(args.job_title)
+    if (str(args.email)) patch.email = str(args.email)
+    if (str(args.phone)) patch.phone = str(args.phone)
+    if (str(args.notes)) patch.notes = str(args.notes)
+
+    const warnings: string[] = []
+    if (str(args.organization_name)) {
+      const orgId = await resolveOrgId(str(args.organization_name)!)
+      if (orgId) patch.organization_id = orgId
+      else warnings.push(`company "${args.organization_name}" not found`)
+    }
+
+    if (Object.keys(patch).length === 0)
+      return {
+        success: false,
+        error: 'Nothing to update.',
+        ...(warnings.length ? { warnings } : {}),
+      }
+    const { data, error } = await supabase
+      .from('contacts')
+      .update(patch)
+      .eq('id', contactId)
+      .select('id, first_name, last_name')
+      .single()
+    if (error) return { success: false, error: error.message }
+    revalidatePath('/contacts')
+    revalidatePath(`/contacts/${contactId}`)
+    return { success: true, updated: data, ...(warnings.length ? { warnings } : {}) }
+  }
+
+  if (name === 'get_record') {
+    const entity = str(args.entity)
+    const nameOrId = str(args.name_or_id)
+    if (!entity || !nameOrId)
+      return { success: false, error: 'entity and name_or_id are required.' }
+
+    if (entity === 'organization') {
+      const id = (await resolveOrgId(nameOrId)) ?? nameOrId
+      const { data, error } = await supabase
+        .from('organizations')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle()
+      if (error || !data) return { success: false, error: `Organization "${nameOrId}" not found.` }
+      return { success: true, record: data }
+    }
+    if (entity === 'contact') {
+      const id = (await resolveContactId(nameOrId)) ?? nameOrId
+      const { data, error } = await supabase
+        .from('contacts')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle()
+      if (error || !data) return { success: false, error: `Contact "${nameOrId}" not found.` }
+      return { success: true, record: data }
+    }
+    if (entity === 'opportunity') {
+      const id = (await resolveOpportunityId(nameOrId)) ?? nameOrId
+      const [{ data, error }, { data: comments }] = await Promise.all([
+        supabase.from('opportunities').select('*').eq('id', id).maybeSingle(),
+        supabase
+          .from('opportunity_comments')
+          .select('author, body, created_at')
+          .eq('opportunity_id', id)
+          .order('created_at', { ascending: false }),
+      ])
+      if (error || !data) return { success: false, error: `Opportunity "${nameOrId}" not found.` }
+      return { success: true, record: data, comments: comments ?? [] }
+    }
+    if (entity === 'task') {
+      const id = (await resolveTaskId(nameOrId)) ?? nameOrId
+      const [{ data, error }, { data: comments }] = await Promise.all([
+        supabase.from('tasks').select('*').eq('id', id).maybeSingle(),
+        supabase
+          .from('task_comments')
+          .select('author, body, created_at')
+          .eq('task_id', id)
+          .order('created_at', { ascending: false }),
+      ])
+      if (error || !data) return { success: false, error: `Task "${nameOrId}" not found.` }
+      return { success: true, record: data, comments: comments ?? [] }
+    }
+    return { success: false, error: `Unknown entity: ${entity}` }
+  }
+
+  if (name === 'archive_organization') {
+    const orgId = await resolveOrgId(str(args.organization_name) ?? undefined)
+    if (!orgId)
+      return { success: false, error: `Company "${args.organization_name}" not found.` }
+    const { error } = await supabase
+      .from('organizations')
+      .update({ archived: true })
+      .eq('id', orgId)
+    if (error) return { success: false, error: error.message }
+    revalidatePath('/organizations')
+    return { success: true, archived: { id: orgId } }
+  }
+
+  if (name === 'archive_contact') {
+    const contactId = await resolveContactId(str(args.contact_name) ?? undefined)
+    if (!contactId)
+      return { success: false, error: `Contact "${args.contact_name}" not found.` }
+    const { error } = await supabase
+      .from('contacts')
+      .update({ archived: true })
+      .eq('id', contactId)
+    if (error) return { success: false, error: error.message }
+    revalidatePath('/contacts')
+    return { success: true, archived: { id: contactId } }
+  }
+
+  if (name === 'archive_opportunity') {
+    const oppId = await resolveOpportunityId(str(args.opportunity_title) ?? undefined)
+    if (!oppId)
+      return { success: false, error: `Opportunity "${args.opportunity_title}" not found.` }
+    const { error } = await supabase
+      .from('opportunities')
+      .update({ archived: true })
+      .eq('id', oppId)
+    if (error) return { success: false, error: error.message }
+    revalidatePath('/')
+    return { success: true, archived: { id: oppId } }
+  }
+
+  if (name === 'archive_task') {
+    const taskId = await resolveTaskId(str(args.task_title) ?? undefined)
+    if (!taskId)
+      return { success: false, error: `Task "${args.task_title}" not found.` }
+    const { error } = await supabase
+      .from('tasks')
+      .update({ archived: true })
+      .eq('id', taskId)
+    if (error) return { success: false, error: error.message }
+    revalidatePath('/tasks')
+    return { success: true, archived: { id: taskId } }
   }
 
   return { success: false, error: `Unknown tool: ${name}` }

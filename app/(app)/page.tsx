@@ -21,6 +21,7 @@ export default async function PipelinePage() {
     .select(
       '*, organization:organizations(id, name), contact:contacts(id, first_name, last_name)'
     )
+    .eq('archived', false)
     .order('created_at', { ascending: false })
 
   if (error) {

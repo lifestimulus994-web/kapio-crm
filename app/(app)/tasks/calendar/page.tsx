@@ -12,7 +12,8 @@ export default async function TasksCalendarPage() {
       .from('tasks')
       .select(
         '*, organization:organizations(id, name), contact:contacts(id, first_name, last_name), opportunity:opportunities(id, title)'
-      ),
+      )
+      .eq('archived', false),
     supabase.from('organizations').select('id, name').order('name'),
     supabase
       .from('contacts')

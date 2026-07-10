@@ -8,6 +8,7 @@ export default async function OrganizationsPage() {
   const { data, error } = await supabase
     .from('organizations')
     .select('*')
+    .eq('archived', false)
     .order('name')
 
   if (error) {

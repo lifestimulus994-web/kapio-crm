@@ -9,6 +9,7 @@ export default async function ContactsPage() {
   const { data, error } = await supabase
     .from('contacts')
     .select('*, organization:organizations(id, name)')
+    .eq('archived', false)
     .order('first_name')
 
   if (error) {

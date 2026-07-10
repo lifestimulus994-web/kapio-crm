@@ -17,9 +17,16 @@ const WRITE_TOOLS = new Set([
   'create_contact',
   'create_opportunity',
   'create_task',
+  'update_organization',
+  'update_contact',
   'update_opportunity',
   'update_task',
   'add_task_comment',
+  'add_opportunity_comment',
+  'archive_organization',
+  'archive_contact',
+  'archive_opportunity',
+  'archive_task',
 ])
 
 export async function POST(req: Request) {

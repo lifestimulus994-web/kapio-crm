@@ -1,11 +1,33 @@
 import { NextResponse } from 'next/server'
 import { GoogleGenAI, FunctionCallingConfigMode } from '@google/genai'
-import { tools, runTool, buildContext, loadKnowledge } from '@/lib/crm-ai'
+import {
+  tools,
+  runTool,
+  buildContext,
+  loadKnowledge,
+  DESTRUCTIVE_TOOLS,
+} from '@/lib/crm-ai'
 import { parseGeorgianSchedule } from '@/lib/gschedule'
 
 export const dynamic = 'force-dynamic'
 
 type ChatMessage = { role: 'user' | 'model'; text: string }
+type PendingConfirmation = { name: string; args: Record<string, unknown>; description: string }
+
+function describeDestructive(name: string, args: Record<string, unknown>): string {
+  switch (name) {
+    case 'archive_organization':
+      return `Archive company "${args.organization_name}"?`
+    case 'archive_contact':
+      return `Archive contact "${args.contact_name}"?`
+    case 'archive_opportunity':
+      return `Archive deal "${args.opportunity_title}"?`
+    case 'archive_task':
+      return `Archive task "${args.task_title}"?`
+    default:
+      return `Confirm ${name}?`
+  }
+}
 
 // ---------- route ----------
 export async function POST(req: Request) {
@@ -16,11 +38,28 @@ export async function POST(req: Request) {
     )
   }
 
-  let body: { message?: string; history?: ChatMessage[] }
+  let body: {
+    message?: string
+    history?: ChatMessage[]
+    confirm?: { name: string; args: Record<string, unknown> }
+  }
   try {
     body = await req.json()
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 })
+  }
+
+  // A confirmed destructive action from the UI — run it directly, no AI call.
+  if (body.confirm) {
+    const { name, args } = body.confirm
+    if (!DESTRUCTIVE_TOOLS.has(name)) {
+      return NextResponse.json({ error: 'Not a confirmable action.' }, { status: 400 })
+    }
+    const result = await runTool(name, args ?? {})
+    const reply = result.success
+      ? `Done.`
+      : `Couldn't do that: ${result.error ?? 'unknown error'}`
+    return NextResponse.json({ reply, actions: [{ name, result }] })
   }
 
   const message = (body.message ?? '').trim()
@@ -65,14 +104,27 @@ Guidelines:
 - Be concise and direct. Prefer short answers. Reply in the user's language
   (Georgian if they write in Georgian).
 - All monetary values are in Georgian Lari (GEL).
-- Use the "Live CRM data" snapshot to answer lookups, counts, and lists. If the
-  answer isn't in the snapshot, say so plainly instead of guessing.
+- Use the "Live CRM data" snapshot to answer lookups, counts, and lists. If a
+  needed field isn't in the snapshot, call get_record rather than guessing or
+  saying you don't have it (see FULL RECORD DETAILS below). Only say a record
+  doesn't exist at all after checking — never guess an answer you're not sure of.
 - To CREATE a record (organization, contact, opportunity, task) call the matching
-  create tool. To CHANGE something that already exists — rename or edit a company,
-  move a deal to another pipeline stage, mark a task done, change priority/owner/
-  due date, or leave a comment on a task — call update_organization,
-  update_opportunity, update_task, or add_task_comment. Editing an existing record
-  is ALWAYS possible; never tell the user you can only create a new one.
+  create tool. To CHANGE something that already exists — rename or edit a company
+  or contact, move a deal to another pipeline stage, mark a task done, change
+  priority/owner/due date, or leave a comment — call update_organization,
+  update_contact, update_opportunity, update_task, or add_task_comment/
+  add_opportunity_comment. Editing an existing record is ALWAYS possible; never
+  tell the user you can only create a new one.
+- If the user asks to delete/remove/cancel a company, contact, deal, or task, call
+  the matching archive_* tool. It will ask the user to confirm before anything
+  happens — that confirmation step is handled outside of you, so just call the
+  tool normally.
+- FULL RECORD DETAILS: the "Live CRM data" snapshot only has index-level fields.
+  If a question needs something NOT in the snapshot — an organization's address,
+  legal name, or notes; an opportunity's pain_points, next_action, or notes; a
+  task's description; or any record's comment/activity history — call get_record
+  with the entity type and name/title FIRST, then answer from what it returns.
+  Do this instead of saying you don't have the information.
 - FIX A WRONG/MISHEARD COMPANY NAME (e.g. from voice input): use
   update_organization with organization_name = the current (wrong) name and
   new_name = the correct one. To also refill its details, FIRST call
@@ -153,6 +205,7 @@ Guidelines:
     }
 
     const executed: { name: string; result: Record<string, unknown> }[] = []
+    let pending: PendingConfirmation | null = null
 
     // Keep a single model — never degrade to a weaker one. On a 503/overload,
     // retry the SAME model with exponential backoff. If it is still busy after
@@ -209,6 +262,21 @@ Guidelines:
       for (const call of calls) {
         const name = call.name ?? ''
         const args = (call.args ?? {}) as Record<string, unknown>
+
+        if (DESTRUCTIVE_TOOLS.has(name)) {
+          // Don't run it — hand it back to the UI for an explicit confirm/cancel,
+          // and give the model a synthetic "held for confirmation" response so
+          // it can finish the turn with a normal summary instead of retrying.
+          pending = { name, args, description: describeDestructive(name, args) }
+          responseParts.push({
+            functionResponse: {
+              name,
+              response: { success: true, pending: true, note: 'Held for user confirmation.' },
+            },
+          })
+          continue
+        }
+
         const result = await runTool(name, args)
         executed.push({ name, result })
         responseParts.push({ functionResponse: { name, response: result } })
@@ -218,11 +286,34 @@ Guidelines:
       response = await generate(contents)
     }
 
-    const reply =
-      response.text ??
-      "I couldn't produce a response. Please try rephrasing your question."
+    let reply = response.text ?? ''
+    if (!reply) {
+      // Never hand back a dead-end "I didn't understand" — nudge for one more
+      // real attempt, and only fall back to something actionable if that also
+      // comes back empty.
+      const nudge = await generate([
+        ...contents,
+        {
+          role: 'user',
+          parts: [
+            {
+              text: 'You must reply now with something useful: summarize what you found or did, or ask one specific question naming the exact companies/contacts/deals/tasks you are unsure about. Do not say you did not understand.',
+            },
+          ],
+        },
+      ])
+      reply =
+        nudge.text ??
+        (executed.length > 0
+          ? `Done: ${executed.map((e) => e.name).join(', ')}.`
+          : 'Tell me the company, contact, deal, or task name and I’ll look it up.')
+    }
 
-    return NextResponse.json({ reply, actions: executed })
+    return NextResponse.json({
+      reply,
+      actions: executed,
+      ...(pending ? { pendingConfirmation: pending } : {}),
+    })
   } catch (err) {
     const raw = err instanceof Error ? err.message : 'Unexpected server error.'
     if (/RESOURCE_EXHAUSTED|quota|\b429\b/i.test(raw)) {

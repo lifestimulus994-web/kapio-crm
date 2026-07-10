@@ -17,6 +17,7 @@ export default async function TasksPage() {
     .select(
       '*, organization:organizations(id, name), contact:contacts(id, first_name, last_name), opportunity:opportunities(id, title)'
     )
+    .eq('archived', false)
     .order('due_date', { ascending: true, nullsFirst: false })
 
   if (error) {
