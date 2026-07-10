@@ -52,7 +52,7 @@ export default async function PipelinePage() {
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between shrink-0">
+      <div className="px-4 sm:px-6 py-4 border-b border-slate-800 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between shrink-0">
         <div>
           <h1 className="text-base font-semibold text-slate-100">Pipeline</h1>
           <p className="text-xs text-slate-500 mt-0.5">
@@ -63,14 +63,14 @@ export default async function PipelinePage() {
         </div>
         <Link
           href="/opportunities/new"
-          className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+          className="self-start bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
         >
           + New Opportunity
         </Link>
       </div>
 
       {/* Kanban */}
-      <div className="flex-1 overflow-x-auto px-6 py-5">
+      <div className="flex-1 overflow-x-auto px-4 sm:px-6 py-5">
         <div className="flex gap-3 h-full" style={{ minWidth: 'max-content' }}>
           {STAGES.map((stage) => {
             const cols = byStage[stage]

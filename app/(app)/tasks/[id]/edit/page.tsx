@@ -77,7 +77,7 @@ export default async function EditTaskPage({
   }
 
   return (
-    <div className="max-w-2xl mx-auto px-6 py-6">
+    <div className="max-w-2xl mx-auto px-4 sm:px-6 py-6">
       <div className="flex items-center gap-3 mb-7">
         <Link
           href={`/tasks/${id}`}
@@ -121,7 +121,7 @@ export default async function EditTaskPage({
               className={input + ' resize-none'}
             />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className={label}>Start Date</label>
               <input
@@ -198,7 +198,7 @@ export default async function EditTaskPage({
               ))}
             </select>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className={label}>Organization</label>
               <select

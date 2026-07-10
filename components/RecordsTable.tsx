@@ -83,7 +83,7 @@ export default function RecordsTable({
   return (
     <div className="h-full flex flex-col">
       {/* Tabs */}
-      <div className="px-6 pt-5 shrink-0">
+      <div className="px-4 sm:px-6 pt-5 shrink-0">
         <div className="flex items-center gap-6 border-b border-slate-800">
           {tabs.map((t) => (
             <Link
@@ -102,7 +102,7 @@ export default function RecordsTable({
       </div>
 
       {/* Toolbar */}
-      <div className="px-6 py-4 flex items-center gap-3 shrink-0">
+      <div className="px-4 sm:px-6 py-4 flex flex-wrap items-center gap-3 shrink-0">
         <div className="relative flex-1 max-w-md">
           <Search
             size={15}
@@ -128,7 +128,7 @@ export default function RecordsTable({
       </div>
 
       {/* Table */}
-      <div className="flex-1 overflow-auto px-6 pb-6">
+      <div className="flex-1 overflow-auto px-4 sm:px-6 pb-6">
         <div className="rounded-xl border border-slate-800 bg-slate-900/40 overflow-hidden">
           <table className="w-full text-sm">
             <thead>

@@ -59,7 +59,7 @@ export default async function EditContactPage({
   }
 
   return (
-    <div className="max-w-2xl mx-auto px-6 py-6">
+    <div className="max-w-2xl mx-auto px-4 sm:px-6 py-6">
       {/* Header */}
       <div className="flex items-center gap-3 mb-7">
         <Link
@@ -93,7 +93,7 @@ export default async function EditContactPage({
           <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
             Personal Information
           </h2>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className={label}>First Name *</label>
               <input
@@ -149,7 +149,7 @@ export default async function EditContactPage({
           <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
             Contact Details
           </h2>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className={label}>Email</label>
               <input

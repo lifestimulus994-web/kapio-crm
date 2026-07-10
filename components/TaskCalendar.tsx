@@ -373,103 +373,106 @@ export default function TaskCalendar({
         </div>
       )}
 
-      {/* Day headers */}
-      <div className="flex shrink-0 border-b border-slate-800">
-        <div className="w-14 shrink-0" />
-        <div className="grid flex-1 grid-cols-7">
-          {days.map((d) => (
-            <div
-              key={d.toISOString()}
-              className="border-l border-slate-800 px-2 py-1.5 text-center"
-            >
-              <div className="text-[10px] uppercase tracking-wide text-slate-500">
-                {DAY_NAMES[(d.getDay() + 6) % 7]}
-              </div>
-              <div
-                className={`mx-auto mt-0.5 flex h-6 w-6 items-center justify-center rounded-full text-sm font-semibold ${
-                  isToday(d) ? 'bg-emerald-600 text-white' : 'text-slate-300'
-                }`}
-              >
-                {d.getDate()}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* All-day row */}
-      <div className="flex shrink-0 border-b border-slate-800 bg-slate-900/40">
-        <div className="flex w-14 shrink-0 items-center justify-end pr-1.5 text-[10px] text-slate-600">
-          all-day
-        </div>
-        <div className="grid flex-1 grid-cols-7">
-          {days.map((d) => {
-            const items = scheduled.filter(
-              (x) => x.s.allDay && d >= startOfDay(x.s.start) && d <= startOfDay(x.s.end)
-            )
-            return (
-              <div
-                key={d.toISOString()}
-                className="min-h-[28px] space-y-0.5 border-l border-slate-800 p-0.5"
-              >
-                {items.map(({ t }) => (
-                  <button
-                    key={t.id}
-                    onClick={() => openEditorForTask(t)}
-                    className={`block w-full truncate rounded border px-1.5 py-0.5 text-left text-[11px] ${
-                      eventColor[t.priority]
-                    } ${t.status === 'done' ? 'opacity-50 line-through' : ''}`}
+      {/* Body: horizontally scrollable on narrow screens so 7 day columns stay tappable */}
+      <div className="flex-1 overflow-x-auto">
+        <div className="flex h-full min-w-[700px] flex-col">
+          {/* Day headers */}
+          <div className="flex shrink-0 border-b border-slate-800">
+            <div className="w-14 shrink-0" />
+            <div className="grid flex-1 grid-cols-7">
+              {days.map((d) => (
+                <div
+                  key={d.toISOString()}
+                  className="border-l border-slate-800 px-2 py-1.5 text-center"
+                >
+                  <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                    {DAY_NAMES[(d.getDay() + 6) % 7]}
+                  </div>
+                  <div
+                    className={`mx-auto mt-0.5 flex h-6 w-6 items-center justify-center rounded-full text-sm font-semibold ${
+                      isToday(d) ? 'bg-emerald-600 text-white' : 'text-slate-300'
+                    }`}
                   >
-                    {t.title}
-                  </button>
-                ))}
-              </div>
-            )
-          })}
-        </div>
-      </div>
-
-      {/* Scrollable time grid */}
-      <div className="flex flex-1 overflow-y-auto">
-        <div className="flex w-full">
-          {/* Hour gutter */}
-          <div className="relative w-14 shrink-0" style={{ height: GRID_H }}>
-            {Array.from({ length: 24 }, (_, h) => (
-              <div
-                key={h}
-                className="absolute right-1.5 -translate-y-1/2 text-[10px] text-slate-600"
-                style={{ top: h * HOUR_H }}
-              >
-                {h === 0 ? '' : `${pad(h)}:00`}
-              </div>
-            ))}
+                    {d.getDate()}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
 
-          {/* Day columns + events */}
-          <div ref={contentRef} className="relative flex-1" style={{ height: GRID_H }}>
-            {/* Hour lines */}
-            {Array.from({ length: 24 }, (_, h) => (
-              <div
-                key={h}
-                className="pointer-events-none absolute inset-x-0 border-t border-slate-800/70"
-                style={{ top: h * HOUR_H }}
-              />
-            ))}
+          {/* All-day row */}
+          <div className="flex shrink-0 border-b border-slate-800 bg-slate-900/40">
+            <div className="flex w-14 shrink-0 items-center justify-end pr-1.5 text-[10px] text-slate-600">
+              all-day
+            </div>
+            <div className="grid flex-1 grid-cols-7">
+              {days.map((d) => {
+                const items = scheduled.filter(
+                  (x) => x.s.allDay && d >= startOfDay(x.s.start) && d <= startOfDay(x.s.end)
+                )
+                return (
+                  <div
+                    key={d.toISOString()}
+                    className="min-h-[28px] space-y-0.5 border-l border-slate-800 p-0.5"
+                  >
+                    {items.map(({ t }) => (
+                      <button
+                        key={t.id}
+                        onClick={() => openEditorForTask(t)}
+                        className={`block w-full truncate rounded border px-1.5 py-0.5 text-left text-[11px] ${
+                          eventColor[t.priority]
+                        } ${t.status === 'done' ? 'opacity-50 line-through' : ''}`}
+                      >
+                        {t.title}
+                      </button>
+                    ))}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
 
-            {/* Column hit areas (click to create) */}
-            {days.map((d, i) => (
-              <div
-                key={d.toISOString()}
-                onClick={(e) => createOnSlot(i, e)}
-                className={`absolute top-0 bottom-0 border-l border-slate-800 ${
-                  isToday(d) ? 'bg-emerald-500/[0.03]' : ''
-                }`}
-                style={{ left: `${(i / 7) * 100}%`, width: `${100 / 7}%` }}
-              />
-            ))}
+          {/* Scrollable time grid */}
+          <div className="flex flex-1 overflow-y-auto">
+            <div className="flex w-full">
+              {/* Hour gutter */}
+              <div className="relative w-14 shrink-0" style={{ height: GRID_H }}>
+                {Array.from({ length: 24 }, (_, h) => (
+                  <div
+                    key={h}
+                    className="absolute right-1.5 -translate-y-1/2 text-[10px] text-slate-600"
+                    style={{ top: h * HOUR_H }}
+                  >
+                    {h === 0 ? '' : `${pad(h)}:00`}
+                  </div>
+                ))}
+              </div>
 
-            {/* Timed events, packed into lanes per day */}
-            {days.map((d, dayIndex) => {
+              {/* Day columns + events */}
+              <div ref={contentRef} className="relative flex-1" style={{ height: GRID_H }}>
+                {/* Hour lines */}
+                {Array.from({ length: 24 }, (_, h) => (
+                  <div
+                    key={h}
+                    className="pointer-events-none absolute inset-x-0 border-t border-slate-800/70"
+                    style={{ top: h * HOUR_H }}
+                  />
+                ))}
+
+                {/* Column hit areas (click to create) */}
+                {days.map((d, i) => (
+                  <div
+                    key={d.toISOString()}
+                    onClick={(e) => createOnSlot(i, e)}
+                    className={`absolute top-0 bottom-0 border-l border-slate-800 ${
+                      isToday(d) ? 'bg-emerald-500/[0.03]' : ''
+                    }`}
+                    style={{ left: `${(i / 7) * 100}%`, width: `${100 / 7}%` }}
+                  />
+                ))}
+
+                {/* Timed events, packed into lanes per day */}
+                {days.map((d, dayIndex) => {
               const dayItems = scheduled.filter(
                 (x) => !x.s.allDay && isSameDay(x.s.start, d)
               )
@@ -556,6 +559,8 @@ export default function TaskCalendar({
                 </div>
               </div>
             )}
+          </div>
+        </div>
           </div>
         </div>
       </div>

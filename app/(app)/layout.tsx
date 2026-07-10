@@ -10,9 +10,9 @@ export default async function AppLayout({
   const member = await requireMember()
 
   return (
-    <div className="flex">
+    <div className="flex h-screen flex-col lg:flex-row">
       <Sidebar email={member.email} isOwner={member.role === 'owner'} />
-      <main className="flex-1 h-screen overflow-y-auto">{children}</main>
+      <main className="flex-1 overflow-y-auto">{children}</main>
       <AIAssistant />
     </div>
   )

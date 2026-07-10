@@ -108,7 +108,7 @@ export default async function TaskDetailPage({
     ]
 
   return (
-    <div className="px-6 py-6 max-w-5xl">
+    <div className="px-4 sm:px-6 py-6 max-w-5xl">
       {/* Header */}
       <div className="flex items-start gap-3 mb-6">
         <Link

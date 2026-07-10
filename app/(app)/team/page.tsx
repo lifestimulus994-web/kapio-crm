@@ -12,7 +12,7 @@ export default async function TeamPage() {
     .order('created_at', { ascending: true })
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-8">
+    <div className="mx-auto max-w-2xl px-4 sm:px-6 py-8">
       <h1 className="mb-1 text-xl font-semibold text-slate-100">გუნდი</h1>
       <p className="mb-6 text-sm text-slate-500">
         დაამატე ან წაშალე წევრები. თითოეულს საკუთარი ელფოსტა და პაროლი უნდა

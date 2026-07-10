@@ -104,7 +104,7 @@ export default async function OpportunityDetailPage({
   ]
 
   return (
-    <div className="px-6 py-6 max-w-6xl">
+    <div className="px-4 sm:px-6 py-6 max-w-6xl">
       {/* Header */}
       <div className="flex items-start gap-3 mb-5">
         <Link

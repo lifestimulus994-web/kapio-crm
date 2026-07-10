@@ -78,7 +78,7 @@ export default async function NewTaskPage({
   }
 
   return (
-    <div className="max-w-2xl mx-auto px-6 py-6">
+    <div className="max-w-2xl mx-auto px-4 sm:px-6 py-6">
       <div className="flex items-center gap-3 mb-7">
         <Link
           href="/tasks"
@@ -113,7 +113,7 @@ export default async function NewTaskPage({
               placeholder="Details…"
             />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className={label}>Start Date</label>
               <input name="start_date" type="date" className={input} />
@@ -192,7 +192,7 @@ export default async function NewTaskPage({
                 ))}
               </select>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className={label}>Organization</label>
                 <select

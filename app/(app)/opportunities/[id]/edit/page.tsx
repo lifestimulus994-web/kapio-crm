@@ -86,7 +86,7 @@ export default async function EditOpportunityPage({
   }
 
   return (
-    <div className="max-w-2xl mx-auto px-6 py-6">
+    <div className="max-w-2xl mx-auto px-4 sm:px-6 py-6">
       {/* Header */}
       <div className="flex items-center gap-3 mb-7">
         <Link
@@ -128,7 +128,7 @@ export default async function EditOpportunityPage({
               className={input}
             />
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className={label}>Value (GEL) *</label>
               <input
@@ -159,7 +159,7 @@ export default async function EditOpportunityPage({
           <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
             Link To
           </h2>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className={label}>Organization</label>
               <select
@@ -198,7 +198,7 @@ export default async function EditOpportunityPage({
           <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
             Details
           </h2>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className={label}>Owner</label>
               <input

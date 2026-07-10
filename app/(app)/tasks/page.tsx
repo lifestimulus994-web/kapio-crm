@@ -49,7 +49,7 @@ export default async function TasksPage() {
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between shrink-0">
+      <div className="px-4 sm:px-6 py-4 border-b border-slate-800 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between shrink-0">
         <div>
           <h1 className="text-base font-semibold text-slate-100">Tasks</h1>
           <p className="text-xs text-slate-500 mt-0.5">
@@ -82,7 +82,7 @@ export default async function TasksPage() {
       </div>
 
       {/* Lists grouped by status */}
-      <div className="flex-1 overflow-y-auto px-6 py-5 space-y-7 max-w-4xl">
+      <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-7 max-w-4xl">
         {groups.map((status) => {
           const groupTasks = tasks.filter((t) => t.status === status)
           const meta = statusMeta[status]
