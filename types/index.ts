@@ -115,3 +115,20 @@ export type ContactComment = {
   body: string
   created_at: string
 }
+
+export const LEAD_STATUSES = ['new', 'contacted', 'converted', 'lost'] as const
+export type LeadStatus = (typeof LEAD_STATUSES)[number]
+
+export type Lead = {
+  id: string
+  full_name: string
+  phone: string | null
+  email: string | null
+  company: string | null
+  source: string | null
+  notes: string | null
+  status: LeadStatus
+  assigned_to: string | null
+  created_at: string
+  assignee?: { id: string; full_name: string | null; email: string } | null
+}

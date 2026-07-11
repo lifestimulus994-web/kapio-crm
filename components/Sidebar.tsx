@@ -4,12 +4,13 @@ import { useState } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
 import { usePathname } from 'next/navigation'
-import { KanbanSquare, Building2, Users, ListTodo, UserCog, Menu, X } from 'lucide-react'
+import { KanbanSquare, Building2, Users, ListTodo, UserCog, Target, Menu, X } from 'lucide-react'
 import VoiceImport from '@/components/VoiceImport'
 import LogoutButton from '@/components/LogoutButton'
 
 const nav = [
   { href: '/', label: 'Pipeline', Icon: KanbanSquare },
+  { href: '/leads', label: 'Leads', Icon: Target },
   { href: '/organizations', label: 'Organizations', Icon: Building2 },
   { href: '/contacts', label: 'Contacts', Icon: Users },
   { href: '/tasks', label: 'Tasks', Icon: ListTodo },

@@ -165,3 +165,22 @@ create table if not exists public.contact_comments (
   created_at timestamptz not null default now()
 );
 create index if not exists idx_contact_comments_contact on public.contact_comments(contact_id);
+
+-- Leads: a separate, lightweight funnel-entry entity. The owner distributes
+-- each lead to a team member by name (assigned_to); a member only ever sees
+-- leads assigned to them (enforced in app code, same pattern as team routes).
+-- "company" is free text, not a foreign key — a lead often names a company
+-- before it exists as a real organizations row.
+create table if not exists public.leads (
+  id          uuid primary key default gen_random_uuid(),
+  full_name   text not null,
+  phone       text,
+  email       text,
+  company     text,
+  source      text,
+  notes       text,
+  status      text not null default 'new' check (status in ('new','contacted','converted','lost')),
+  assigned_to uuid references public.members(id) on delete set null,
+  created_at  timestamptz not null default now()
+);
+create index if not exists idx_leads_assigned on public.leads(assigned_to);
