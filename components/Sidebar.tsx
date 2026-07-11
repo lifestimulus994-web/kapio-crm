@@ -10,10 +10,10 @@ import LogoutButton from '@/components/LogoutButton'
 
 const nav = [
   { href: '/', label: 'Pipeline', Icon: KanbanSquare },
-  { href: '/leads', label: 'Leads', Icon: Target },
   { href: '/organizations', label: 'Organizations', Icon: Building2 },
   { href: '/contacts', label: 'Contacts', Icon: Users },
   { href: '/tasks', label: 'Tasks', Icon: ListTodo },
+  { href: '/leads', label: 'Leads', Icon: Target },
 ]
 
 export default function Sidebar({
