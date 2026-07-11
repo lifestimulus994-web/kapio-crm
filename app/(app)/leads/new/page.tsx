@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
 import { requireMember } from '@/lib/auth'
 import { ChevronLeft } from 'lucide-react'
+import PasteImport from '@/components/leads/PasteImport'
 
 export const dynamic = 'force-dynamic'
 
@@ -12,7 +13,13 @@ const input =
 const label = 'block text-xs font-medium text-slate-400 mb-1.5'
 
 export default async function NewLeadPage() {
-  await requireMember()
+  const me = await requireMember()
+  const isOwner = me.role === 'owner'
+
+  const { data: membersData } = isOwner
+    ? await supabase.from('members').select('id, full_name, email').order('full_name')
+    : { data: null }
+  const members = (membersData ?? []) as { id: string; full_name: string | null; email: string }[]
 
   async function create(formData: FormData) {
     'use server'
@@ -125,6 +132,14 @@ export default async function NewLeadPage() {
           </button>
         </div>
       </form>
+
+      <div className="my-6 flex items-center gap-3 text-xs text-slate-600">
+        <div className="h-px flex-1 bg-slate-800" />
+        OR
+        <div className="h-px flex-1 bg-slate-800" />
+      </div>
+
+      <PasteImport isOwner={isOwner} members={members} />
     </div>
   )
 }
