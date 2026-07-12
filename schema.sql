@@ -235,6 +235,7 @@ declare
   new_workspace_id uuid;
   invited_id uuid;
   invited_role text;
+  chosen_plan text;
 begin
   invited_id := (new.raw_user_meta_data->>'invited_workspace_id')::uuid;
 
@@ -249,8 +250,14 @@ begin
     return new;
   end if;
 
-  insert into public.workspaces (name)
-  values (coalesce(new.raw_user_meta_data->>'business_name', 'My Business'))
+  chosen_plan := case
+    when new.raw_user_meta_data->>'plan' in ('starter', 'business', 'pro')
+      then new.raw_user_meta_data->>'plan'
+    else 'starter'
+  end;
+
+  insert into public.workspaces (name, plan)
+  values (coalesce(new.raw_user_meta_data->>'business_name', 'My Business'), chosen_plan)
   returning id into new_workspace_id;
 
   insert into public.members (id, workspace_id, email, full_name, role)
@@ -330,3 +337,11 @@ create index if not exists idx_tasks_assigned          on public.tasks(assigned_
 -- Required reason when a deal is marked Lost — surfaces "why we lose deals"
 -- analysis instead of just a stage change.
 alter table public.opportunities add column if not exists lost_reason text;
+
+-- Plan chosen at signup (Starter/Business/Pro on the landing page pricing
+-- section). No billing/payment wired up yet — this only records intent so
+-- it's visible on the Team page and ready for whenever billing is added.
+alter table public.workspaces add column if not exists plan text not null default 'starter';
+alter table public.workspaces drop constraint if exists workspaces_plan_check;
+alter table public.workspaces add constraint workspaces_plan_check
+  check (plan in ('starter', 'business', 'pro'));

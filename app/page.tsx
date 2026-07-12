@@ -255,7 +255,7 @@ export default function LandingPage() {
                 ))}
               </ul>
               <Link
-                href="/signup"
+                href={`/signup?plan=${p.name.toLowerCase()}`}
                 className={`mt-6 rounded-lg px-4 py-2.5 text-center text-sm font-semibold transition-colors ${
                   p.highlighted
                     ? 'bg-emerald-600 text-white hover:bg-emerald-500'
