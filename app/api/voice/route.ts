@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { GoogleGenAI, FunctionCallingConfigMode } from '@google/genai'
 import { buildContext, loadKnowledge, tools, runTool, type AiScope } from '@/lib/crm-ai'
 import { getCurrentMember, hasElevatedAccess } from '@/lib/auth'
+import { parseGeorgianSchedule } from '@/lib/gschedule'
 
 export const dynamic = 'force-dynamic'
 
@@ -90,7 +91,12 @@ export async function POST(req: Request) {
       buildContext(scope),
       loadKnowledge(),
     ])
-    const today = new Date().toISOString().slice(0, 10)
+    // Local date (the server runs in the CRM's timezone) so "today/tomorrow"
+    // resolve to the user's calendar, not UTC — matters most right around
+    // midnight, which is exactly when a salesperson tends to dictate a memo.
+    const today = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Tbilisi',
+    }).format(new Date())
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
 
     const systemInstruction = `You are the data-entry assistant for Kapio CRM, a sales CRM used by a company in Georgia.
@@ -107,9 +113,33 @@ Do the following, in order:
    A company name can be several words and the audio may split or mis-hear it
    (e.g. "ტერავიტა პლუს" may come out as "ტერავი" + "პლიუსი"). Treat such a name
    as ONE company — never split it into two organizations.
-4. Create the missing records using the tools:
-   - create_organization for a new company. FIRST call find_company_contacts with
-     the heard name (add a hint like "Georgia" / the city if known). Use the
+4. RICH CONVERSATION MEMO (the common case — a salesperson describing a call or
+   meeting that actually happened): if the memo describes talking to a real
+   person about a real need, problem, or potential deal — not just "schedule a
+   meeting" — treat it as full CRM data, not just a reminder. Propose ALL of:
+   - create_organization for their company (see lookup rules below), if named
+     and not already existing.
+   - create_contact for the person, if named and not already existing. No web
+     lookup needed for an individual.
+   - create_opportunity representing the need/deal discussed — even if nothing
+     is confirmed sold yet. A real identified need from a real conversation is
+     a pipeline-worthy lead (stage 'New Lead' or 'Contacted', your judgment).
+     Set pain_points from what was discussed; set value_gel only if a concrete
+     number was mentioned, otherwise leave it out — do not invent a figure.
+   - LINK all three to each other (organization_name / contact_name on the
+     opportunity).
+   - create_task for any concrete follow-up mentioned (next call, next
+     meeting), linked to the SAME organization/contact/opportunity by name.
+   - add_opportunity_comment (and add_task_comment if a task was created) with
+     a DETAILED summary of what was actually discussed — the need, any
+     numbers, context, what was agreed — not just "call scheduled." This
+     comment is the permanent record of what happened; write it like a real
+     CRM note, several sentences if the memo had that much content.
+   Only skip organization/contact/opportunity and propose JUST a task when the
+   memo is PURELY a scheduling instruction with no conversation content (e.g.
+   "move tomorrow's meeting with Nino to 5pm").
+   - create_organization lookup: FIRST call find_company_contacts with the
+     heard name (add a hint like "Georgia" / the city if known). Use the
      returned "official_name" as the company name (this corrects the misheard
      spelling). REGISTRY data (companyinfo.ge) — trusted, no verify warning:
      fill "legal_name" and "identification_code" from the results. WEB data —
@@ -117,20 +147,28 @@ Do the following, in order:
      add: "⚠️ Email/phone/website/address auto-found on the web — VERIFY." (skip
      this note if only registry data was found). If the lookup returns
      nothing, create it with the name and details from the memo.
-   - create_contact for a new person (link to the company by name).
-   - create_opportunity when the memo describes a potential deal/sale (set value_gel in
-     GEL if a number is mentioned, choose a sensible stage, link company/contact by name).
-   - create_task when a follow-up or action is mentioned (convert any time reference such
-     as "next Friday" or "in two days" into an absolute due_date in YYYY-MM-DD, relative
-     to today's date above). Link the task to the company/contact/opportunity it concerns
-     by passing their names, so it is connected from the start.
-     KEEP THE TITLE SHORT (e.g. "Call with Nino Beridze (TBC Bank)"), never the full
-     memo sentence — put any background (what's being discussed, prior context) in
-     "description", AND propose an add_task_comment with that same background as the
-     body. If the task is linked to an opportunity, also propose add_opportunity_comment
-     with the same body, so the context shows up on both records once confirmed.
-5. Do not invent data. Only create an opportunity if there is a real deal, and only
-   create a task if there is a real follow-up/action.
+   - KEEP TASK TITLES SHORT (e.g. "Call with Nino Beridze (TBC Bank)"), never
+     the full memo sentence — background goes in "description" and in the
+     comments described above.
+5. CALENDAR SCHEDULING: whenever the memo states ANY day or clock time for a
+   task/meeting, you MUST pass start_at on create_task/update_task — never
+   leave it empty when a time was actually said.
+   * Format: LOCAL ISO datetime with NO timezone suffix, e.g.
+     2026-06-22T18:00:00 (no "Z", no "+04:00"). Also pass duration_minutes
+     (default 60 for a meeting, 30 otherwise).
+   * Resolve relative DATES against today (${today}): დღეს = today, ხვალ =
+     tomorrow, ზეგ = day after tomorrow; weekday names = the next such day.
+   * Resolve the TIME. Business-hours rule: treat 1–7 as afternoon/evening
+     UNLESS the memo says დილის/"morning" — so "6 საათზე" (no qualifier, or
+     with საღამოს/"evening") → 18:00, "9 საათზე" → 09:00 (morning is the only
+     case that stays as-is for 8+; 1–7 always shift to PM by default).
+     "ნახევარი X" = (X-1):30.
+   * Example: today is ${today}, memo says "ხვალ 6 საათზე საღამოს შევხვდები"
+     → start_at = tomorrow's date + "T18:00:00", duration_minutes: 60.
+   Only when NO day and NO time are stated at all, create the task without
+   start_at (it then sits in "Unscheduled").
+6. Do not invent data. Every organization/contact/opportunity/task you propose
+   must trace back to something actually said in the memo.
 
 Your tool calls are PROPOSALS — the user will review and confirm them before anything
 is saved, so it is fine to propose records. Reply in the SAME language as the memo with:
@@ -242,6 +280,23 @@ ${context}`
 
     const summary =
       response.text ?? 'Processed the recording, but produced no summary.'
+
+    // Gemini is unreliable at converting a spoken time expression (e.g. "6
+    // საათზე საღამოს") into a correct 24h start_at — same gap the text chat
+    // route closes by parsing deterministically instead of trusting the
+    // model's own math. Do the same here: parse the transcribed memo (the
+    // start of `summary`, per the prompt's reply format) and, if it names a
+    // concrete time, force any proposed task's start_at/duration to match —
+    // overriding whatever the model guessed.
+    const schedHint = parseGeorgianSchedule(summary, today)
+    if (schedHint) {
+      for (const item of plan) {
+        if (item.name === 'create_task' || item.name === 'update_task') {
+          item.args.start_at = schedHint.startAt
+          item.args.duration_minutes = schedHint.durationMin
+        }
+      }
+    }
 
     // Return the proposal for the user to review/edit before anything is saved.
     return NextResponse.json({ mode: 'plan', summary, plan })
