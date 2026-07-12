@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server'
 import { GoogleGenAI, FunctionCallingConfigMode } from '@google/genai'
 import { supabase } from '@/lib/supabase'
-import { getCurrentMember } from '@/lib/auth'
-import { buildContext, loadKnowledge, tools, runTool } from '@/lib/crm-ai'
+import { getCurrentMember, hasElevatedAccess } from '@/lib/auth'
+import { buildContext, loadKnowledge, tools, runTool, type AiScope } from '@/lib/crm-ai'
 
 export const dynamic = 'force-dynamic'
 
@@ -15,6 +15,11 @@ export const dynamic = 'force-dynamic'
 export async function POST(req: Request) {
   const me = await getCurrentMember()
   if (!me) return NextResponse.json({ error: 'შესვლა საჭიროა' }, { status: 401 })
+  const scope: AiScope = {
+    workspaceId: me.workspace_id,
+    memberId: me.id,
+    elevated: hasElevatedAccess(me),
+  }
 
   let body: { taskId?: string; outcome?: string; mode?: string }
   try {
@@ -31,22 +36,25 @@ export async function POST(req: Request) {
   }
 
   // Load the task + its opportunity (needed to attach the comment/follow-up).
-  const { data: task, error: taskErr } = await supabase
+  let taskQuery = supabase
     .from('tasks')
     .select('id, title, owner, opportunity:opportunities(id, title)')
     .eq('id', taskId)
     .eq('workspace_id', me.workspace_id)
-    .single()
+  if (!scope.elevated) taskQuery = taskQuery.eq('assigned_to', me.id)
+  const { data: task, error: taskErr } = await taskQuery.single()
   if (taskErr || !task) {
     return NextResponse.json({ error: 'Task not found.' }, { status: 404 })
   }
 
   // Always mark the task done.
-  const { error: updErr } = await supabase
+  let updateQuery = supabase
     .from('tasks')
     .update({ status: 'done' })
     .eq('id', taskId)
     .eq('workspace_id', me.workspace_id)
+  if (!scope.elevated) updateQuery = updateQuery.eq('assigned_to', me.id)
+  const { error: updErr } = await updateQuery
   if (updErr) {
     return NextResponse.json({ error: updErr.message }, { status: 500 })
   }
@@ -88,7 +96,7 @@ export async function POST(req: Request) {
 
   try {
     const [context, knowledge] = await Promise.all([
-      buildContext(me.workspace_id),
+      buildContext(scope),
       loadKnowledge(),
     ])
     const today = new Date().toISOString().slice(0, 10)
@@ -158,7 +166,7 @@ ${context}`
       for (const call of calls) {
         const name = call.name ?? ''
         const args = (call.args ?? {}) as Record<string, unknown>
-        const result = await runTool(name, args, me.workspace_id)
+        const result = await runTool(name, args, scope)
         actions.push({ name, result })
         responseParts.push({ functionResponse: { name, response: result } })
       }

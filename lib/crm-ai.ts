@@ -21,35 +21,54 @@ export async function loadKnowledge(): Promise<string> {
 // Shared CRM "AI brain": the data snapshot we give the model, the tool
 // (function-calling) definitions, and the executor that performs the writes.
 // Used by both the text chat route and the voice-import route. Every entry
-// point is workspace-scoped — the caller (chat/voice route) fetches the
-// current member and passes their workspace_id in, so one tenant's AI turn
-// can never read or write another tenant's data via the service-role client.
+// point takes an AiScope built from the caller's own member record — a plain
+// 'member' can only read/write records assigned to them (mirroring the exact
+// visibility rule enforced on every CRM page), while owner/manager see and
+// touch everything in the workspace. workspaceId alone is never enough: it
+// stops cross-tenant leaks but not cross-employee leaks within one tenant.
+export type AiScope = {
+  workspaceId: string
+  memberId: string
+  elevated: boolean
+}
 
 // ---------- CRM context snapshot ----------
-export async function buildContext(workspaceId: string) {
+export async function buildContext(scope: AiScope) {
+  let orgQuery = supabase
+    .from('organizations')
+    .select('id, name, industry, email, phone')
+    .eq('workspace_id', scope.workspaceId)
+    .eq('archived', false)
+  let contactQuery = supabase
+    .from('contacts')
+    .select('id, first_name, last_name, job_title, email, phone, organization_id')
+    .eq('workspace_id', scope.workspaceId)
+    .eq('archived', false)
+  let oppQuery = supabase
+    .from('opportunities')
+    .select('id, title, value_gel, stage, organization_id, contact_id')
+    .eq('workspace_id', scope.workspaceId)
+    .eq('archived', false)
+  let taskQuery = supabase
+    .from('tasks')
+    .select(
+      'id, title, status, priority, owner, start_date, due_date, start_at, end_at, organization_id, contact_id, opportunity_id'
+    )
+    .eq('workspace_id', scope.workspaceId)
+    .eq('archived', false)
+
+  if (!scope.elevated) {
+    orgQuery = orgQuery.eq('assigned_to', scope.memberId)
+    contactQuery = contactQuery.eq('assigned_to', scope.memberId)
+    oppQuery = oppQuery.eq('assigned_to', scope.memberId)
+    taskQuery = taskQuery.eq('assigned_to', scope.memberId)
+  }
+
   const [orgs, contacts, opps, tasks] = await Promise.all([
-    supabase
-      .from('organizations')
-      .select('id, name, industry, email, phone')
-      .eq('workspace_id', workspaceId)
-      .eq('archived', false),
-    supabase
-      .from('contacts')
-      .select('id, first_name, last_name, job_title, email, phone, organization_id')
-      .eq('workspace_id', workspaceId)
-      .eq('archived', false),
-    supabase
-      .from('opportunities')
-      .select('id, title, value_gel, stage, organization_id, contact_id')
-      .eq('workspace_id', workspaceId)
-      .eq('archived', false),
-    supabase
-      .from('tasks')
-      .select(
-        'id, title, status, priority, owner, start_date, due_date, start_at, end_at, organization_id, contact_id, opportunity_id'
-      )
-      .eq('workspace_id', workspaceId)
-      .eq('archived', false),
+    orgQuery,
+    contactQuery,
+    oppQuery,
+    taskQuery,
   ])
   return JSON.stringify({
     organizations: orgs.data ?? [],
@@ -216,14 +235,14 @@ Do NOT guess or fabricate. Never return passwords or private credentials.`
 }
 
 // ---------- helpers to resolve names -> ids (so we reuse existing records) ----------
-// All scoped to the caller's workspace_id — a name/title match can never
-// resolve to another tenant's row.
-async function resolveOrgId(workspaceId: string, name?: string): Promise<string | null> {
+// All scoped to the caller's workspace_id (and, for a plain member, to their
+// own assigned_to) — a name/title match can never resolve to another
+// tenant's row, nor to a teammate's row the caller isn't allowed to see.
+async function resolveOrgId(scope: AiScope, name?: string): Promise<string | null> {
   if (!name) return null
-  const { data } = await supabase
-    .from('organizations')
-    .select('id, name')
-    .eq('workspace_id', workspaceId)
+  let q = supabase.from('organizations').select('id, name').eq('workspace_id', scope.workspaceId)
+  if (!scope.elevated) q = q.eq('assigned_to', scope.memberId)
+  const { data } = await q
   const target = name.toLowerCase().trim()
   const list = data ?? []
   // Exact match first; then a loose contains-match either way, so a misheard or
@@ -237,12 +256,11 @@ async function resolveOrgId(workspaceId: string, name?: string): Promise<string 
   return partial?.id ?? null
 }
 
-async function resolveContactId(workspaceId: string, name?: string): Promise<string | null> {
+async function resolveContactId(scope: AiScope, name?: string): Promise<string | null> {
   if (!name) return null
-  const { data } = await supabase
-    .from('contacts')
-    .select('id, first_name, last_name')
-    .eq('workspace_id', workspaceId)
+  let q = supabase.from('contacts').select('id, first_name, last_name').eq('workspace_id', scope.workspaceId)
+  if (!scope.elevated) q = q.eq('assigned_to', scope.memberId)
+  const { data } = await q
   const target = name.toLowerCase().trim()
   const hit = (data ?? []).find((c) => {
     const full = `${c.first_name ?? ''} ${c.last_name ?? ''}`
@@ -253,12 +271,11 @@ async function resolveContactId(workspaceId: string, name?: string): Promise<str
   return hit?.id ?? null
 }
 
-async function resolveOpportunityId(workspaceId: string, title?: string): Promise<string | null> {
+async function resolveOpportunityId(scope: AiScope, title?: string): Promise<string | null> {
   if (!title) return null
-  const { data } = await supabase
-    .from('opportunities')
-    .select('id, title')
-    .eq('workspace_id', workspaceId)
+  let q = supabase.from('opportunities').select('id, title').eq('workspace_id', scope.workspaceId)
+  if (!scope.elevated) q = q.eq('assigned_to', scope.memberId)
+  const { data } = await q
   const target = title.toLowerCase().trim()
   const hit =
     (data ?? []).find((o) => o.title?.toLowerCase().trim() === target) ??
@@ -267,59 +284,61 @@ async function resolveOpportunityId(workspaceId: string, title?: string): Promis
 }
 
 // Exact-name lookup used to dedup creates (a retried request shouldn't insert
-// a second record for the same company/person/deal/task).
-async function findExactOrgId(workspaceId: string, name: string): Promise<string | null> {
-  const { data } = await supabase
+// a second record for the same company/person/deal/task). Scoped the same
+// way as resolve* — a duplicate hiding in a teammate's private records is
+// invisible to this check, so at worst a second record is created rather
+// than leaking the teammate's data; that tradeoff is the correct one.
+async function findExactOrgId(scope: AiScope, name: string): Promise<string | null> {
+  let q = supabase
     .from('organizations')
     .select('id, name')
-    .eq('workspace_id', workspaceId)
+    .eq('workspace_id', scope.workspaceId)
     .ilike('name', name)
-    .limit(1)
-    .maybeSingle()
+  if (!scope.elevated) q = q.eq('assigned_to', scope.memberId)
+  const { data } = await q.limit(1).maybeSingle()
   return data?.id ?? null
 }
 async function findExactContactId(
-  workspaceId: string,
+  scope: AiScope,
   firstName: string,
   lastName: string
 ): Promise<string | null> {
-  const { data } = await supabase
+  let q = supabase
     .from('contacts')
     .select('id, first_name, last_name')
-    .eq('workspace_id', workspaceId)
+    .eq('workspace_id', scope.workspaceId)
     .ilike('first_name', firstName)
     .ilike('last_name', lastName || '')
-    .limit(1)
-    .maybeSingle()
+  if (!scope.elevated) q = q.eq('assigned_to', scope.memberId)
+  const { data } = await q.limit(1).maybeSingle()
   return data?.id ?? null
 }
-async function findExactOpportunityId(workspaceId: string, title: string): Promise<string | null> {
-  const { data } = await supabase
+async function findExactOpportunityId(scope: AiScope, title: string): Promise<string | null> {
+  let q = supabase
     .from('opportunities')
     .select('id, title')
-    .eq('workspace_id', workspaceId)
+    .eq('workspace_id', scope.workspaceId)
     .ilike('title', title)
-    .limit(1)
-    .maybeSingle()
+  if (!scope.elevated) q = q.eq('assigned_to', scope.memberId)
+  const { data } = await q.limit(1).maybeSingle()
   return data?.id ?? null
 }
-async function findExactTaskId(workspaceId: string, title: string): Promise<string | null> {
-  const { data } = await supabase
+async function findExactTaskId(scope: AiScope, title: string): Promise<string | null> {
+  let q = supabase
     .from('tasks')
     .select('id, title')
-    .eq('workspace_id', workspaceId)
+    .eq('workspace_id', scope.workspaceId)
     .ilike('title', title)
-    .limit(1)
-    .maybeSingle()
+  if (!scope.elevated) q = q.eq('assigned_to', scope.memberId)
+  const { data } = await q.limit(1).maybeSingle()
   return data?.id ?? null
 }
 
-async function resolveTaskId(workspaceId: string, title?: string): Promise<string | null> {
+async function resolveTaskId(scope: AiScope, title?: string): Promise<string | null> {
   if (!title) return null
-  const { data } = await supabase
-    .from('tasks')
-    .select('id, title')
-    .eq('workspace_id', workspaceId)
+  let q = supabase.from('tasks').select('id, title').eq('workspace_id', scope.workspaceId)
+  if (!scope.elevated) q = q.eq('assigned_to', scope.memberId)
+  const { data } = await q
   const target = title.toLowerCase().trim()
   const hit =
     (data ?? []).find((t) => t.title?.toLowerCase().trim() === target) ??
@@ -643,6 +662,11 @@ export const tools: FunctionDeclaration[] = [
         value_gel: { type: Type.NUMBER, description: 'New deal value in GEL.' },
         next_action: { type: Type.STRING },
         notes: { type: Type.STRING },
+        lost_reason: {
+          type: Type.STRING,
+          description:
+            "Why the deal was lost — required when stage is set to 'Lost'. One of: Price too high, Competitor, No budget, No response, Timing, Not qualified, Other.",
+        },
         organization_name: {
           type: Type.STRING,
           description: 'Name of an existing company to LINK this deal to.',
@@ -822,10 +846,10 @@ async function logToolFailure(
 export async function runTool(
   name: string,
   args: Record<string, unknown>,
-  workspaceId: string
+  scope: AiScope
 ): Promise<Record<string, unknown>> {
   try {
-    return await runToolInner(name, args, workspaceId)
+    return await runToolInner(name, args, scope)
   } catch (error) {
     await logToolFailure(name, args, error)
     return {
@@ -838,8 +862,9 @@ export async function runTool(
 async function runToolInner(
   name: string,
   args: Record<string, unknown>,
-  workspaceId: string
+  scope: AiScope
 ): Promise<Record<string, unknown>> {
+  const workspaceId = scope.workspaceId
   const str = (v: unknown) =>
     typeof v === 'string' && v.trim() ? v.trim() : null
   const num = (v: unknown) => {
@@ -881,7 +906,7 @@ async function runToolInner(
 
   if (name === 'create_organization') {
     const orgName = str(args.name) ?? 'Untitled'
-    const existingId = await findExactOrgId(workspaceId, orgName)
+    const existingId = await findExactOrgId(scope, orgName)
     if (existingId) {
       return {
         success: true,
@@ -893,6 +918,7 @@ async function runToolInner(
       .from('organizations')
       .insert({
         workspace_id: workspaceId,
+        assigned_to: scope.memberId,
         name: str(args.name) ?? 'Untitled',
         legal_name: str(args.legal_name) ?? '',
         identification_code: str(args.identification_code) ?? '',
@@ -911,7 +937,7 @@ async function runToolInner(
   }
 
   if (name === 'update_organization') {
-    const orgId = await resolveOrgId(workspaceId, str(args.organization_name) ?? undefined)
+    const orgId = await resolveOrgId(scope, str(args.organization_name) ?? undefined)
     if (!orgId)
       return {
         success: false,
@@ -930,13 +956,9 @@ async function runToolInner(
     if (str(args.notes)) patch.notes = str(args.notes)
     if (Object.keys(patch).length === 0)
       return { success: false, error: 'Nothing to update.' }
-    const { data, error } = await supabase
-      .from('organizations')
-      .update(patch)
-      .eq('id', orgId)
-      .eq('workspace_id', workspaceId)
-      .select('id, name')
-      .single()
+    let updOrgQuery = supabase.from('organizations').update(patch).eq('id', orgId).eq('workspace_id', workspaceId)
+    if (!scope.elevated) updOrgQuery = updOrgQuery.eq('assigned_to', scope.memberId)
+    const { data, error } = await updOrgQuery.select('id, name').single()
     if (error) return { success: false, error: error.message }
     revalidatePath('/organizations')
     revalidatePath(`/organizations/${orgId}`)
@@ -963,7 +985,7 @@ async function runToolInner(
   if (name === 'create_contact') {
     const firstName = str(args.first_name) ?? 'Unknown'
     const lastName = str(args.last_name) ?? ''
-    const existingId = await findExactContactId(workspaceId, firstName, lastName)
+    const existingId = await findExactContactId(scope, firstName, lastName)
     if (existingId) {
       return {
         success: true,
@@ -971,11 +993,12 @@ async function runToolInner(
         note: 'already existed, reused',
       }
     }
-    const orgId = await resolveOrgId(workspaceId, str(args.organization_name) ?? undefined)
+    const orgId = await resolveOrgId(scope, str(args.organization_name) ?? undefined)
     const { data, error } = await supabase
       .from('contacts')
       .insert({
         workspace_id: workspaceId,
+        assigned_to: scope.memberId,
         first_name: firstName,
         last_name: lastName,
         job_title: str(args.job_title),
@@ -1001,7 +1024,7 @@ async function runToolInner(
 
   if (name === 'create_opportunity') {
     const title = str(args.title) ?? 'Untitled deal'
-    const existingId = await findExactOpportunityId(workspaceId, title)
+    const existingId = await findExactOpportunityId(scope, title)
     if (existingId) {
       return {
         success: true,
@@ -1010,8 +1033,8 @@ async function runToolInner(
       }
     }
     const [orgId, contactId] = await Promise.all([
-      resolveOrgId(workspaceId, str(args.organization_name) ?? undefined),
-      resolveContactId(workspaceId, str(args.contact_name) ?? undefined),
+      resolveOrgId(scope, str(args.organization_name) ?? undefined),
+      resolveContactId(scope, str(args.contact_name) ?? undefined),
     ])
     const stage = STAGES.includes(String(args.stage))
       ? String(args.stage)
@@ -1020,6 +1043,7 @@ async function runToolInner(
       .from('opportunities')
       .insert({
         workspace_id: workspaceId,
+        assigned_to: scope.memberId,
         title,
         value_gel: num(args.value_gel),
         stage,
@@ -1038,7 +1062,7 @@ async function runToolInner(
 
   if (name === 'create_task') {
     const title = str(args.title) ?? 'Untitled task'
-    const existingId = await findExactTaskId(workspaceId, title)
+    const existingId = await findExactTaskId(scope, title)
     if (existingId) {
       return {
         success: true,
@@ -1047,9 +1071,9 @@ async function runToolInner(
       }
     }
     const [orgId, contactId, oppId] = await Promise.all([
-      resolveOrgId(workspaceId, str(args.organization_name) ?? undefined),
-      resolveContactId(workspaceId, str(args.contact_name) ?? undefined),
-      resolveOpportunityId(workspaceId, str(args.opportunity_title) ?? undefined),
+      resolveOrgId(scope, str(args.organization_name) ?? undefined),
+      resolveContactId(scope, str(args.contact_name) ?? undefined),
+      resolveOpportunityId(scope, str(args.opportunity_title) ?? undefined),
     ])
     const allowed = ['todo', 'in_progress', 'done']
     const status = allowed.includes(String(args.status))
@@ -1074,6 +1098,7 @@ async function runToolInner(
       .from('tasks')
       .insert({
         workspace_id: workspaceId,
+        assigned_to: scope.memberId,
         title,
         description: str(args.description),
         start_date: str(args.start_date),
@@ -1095,7 +1120,7 @@ async function runToolInner(
 
   if (name === 'update_opportunity') {
     const oppId = await resolveOpportunityId(
-      workspaceId,
+      scope,
       str(args.opportunity_title) ?? undefined
     )
     if (!oppId)
@@ -1108,15 +1133,21 @@ async function runToolInner(
     if (args.value_gel !== undefined) patch.value_gel = num(args.value_gel)
     if (str(args.next_action)) patch.next_action = str(args.next_action)
     if (str(args.notes)) patch.notes = str(args.notes)
+    if (patch.stage === 'Lost') {
+      const reason = str(args.lost_reason)
+      if (!reason)
+        return { success: false, error: 'lost_reason is required when stage is Lost.' }
+      patch.lost_reason = reason
+    }
 
     const warnings: string[] = []
     if (str(args.organization_name)) {
-      const linkOrgId = await resolveOrgId(workspaceId, str(args.organization_name)!)
+      const linkOrgId = await resolveOrgId(scope, str(args.organization_name)!)
       if (linkOrgId) patch.organization_id = linkOrgId
       else warnings.push(`company "${args.organization_name}" not found`)
     }
     if (str(args.contact_name)) {
-      const linkContactId = await resolveContactId(workspaceId, str(args.contact_name)!)
+      const linkContactId = await resolveContactId(scope, str(args.contact_name)!)
       if (linkContactId) patch.contact_id = linkContactId
       else warnings.push(`contact "${args.contact_name}" not found`)
     }
@@ -1127,20 +1158,16 @@ async function runToolInner(
         error: 'Nothing to update.',
         ...(warnings.length ? { warnings } : {}),
       }
-    const { data, error } = await supabase
-      .from('opportunities')
-      .update(patch)
-      .eq('id', oppId)
-      .eq('workspace_id', workspaceId)
-      .select('id, title, value_gel, stage')
-      .single()
+    let updOppQuery = supabase.from('opportunities').update(patch).eq('id', oppId).eq('workspace_id', workspaceId)
+    if (!scope.elevated) updOppQuery = updOppQuery.eq('assigned_to', scope.memberId)
+    const { data, error } = await updOppQuery.select('id, title, value_gel, stage').single()
     if (error) return { success: false, error: error.message }
     revalidatePath('/dashboard')
     return { success: true, updated: data, ...(warnings.length ? { warnings } : {}) }
   }
 
   if (name === 'update_task') {
-    const taskId = await resolveTaskId(workspaceId, str(args.task_title) ?? undefined)
+    const taskId = await resolveTaskId(scope, str(args.task_title) ?? undefined)
     if (!taskId)
       return { success: false, error: `Task "${args.task_title}" not found.` }
     const patch: Record<string, unknown> = {}
@@ -1169,17 +1196,17 @@ async function runToolInner(
     // Resolve links by name; warn (don't fail) if a named record isn't found.
     const warnings: string[] = []
     if (str(args.organization_name)) {
-      const orgId = await resolveOrgId(workspaceId, str(args.organization_name)!)
+      const orgId = await resolveOrgId(scope, str(args.organization_name)!)
       if (orgId) patch.organization_id = orgId
       else warnings.push(`company "${args.organization_name}" not found`)
     }
     if (str(args.contact_name)) {
-      const contactId = await resolveContactId(workspaceId, str(args.contact_name)!)
+      const contactId = await resolveContactId(scope, str(args.contact_name)!)
       if (contactId) patch.contact_id = contactId
       else warnings.push(`contact "${args.contact_name}" not found`)
     }
     if (str(args.opportunity_title)) {
-      const oppId = await resolveOpportunityId(workspaceId, str(args.opportunity_title)!)
+      const oppId = await resolveOpportunityId(scope, str(args.opportunity_title)!)
       if (oppId) patch.opportunity_id = oppId
       else warnings.push(`opportunity "${args.opportunity_title}" not found`)
     }
@@ -1190,11 +1217,9 @@ async function runToolInner(
         error: 'Nothing to update.',
         ...(warnings.length ? { warnings } : {}),
       }
-    const { data, error } = await supabase
-      .from('tasks')
-      .update(patch)
-      .eq('id', taskId)
-      .eq('workspace_id', workspaceId)
+    let updTaskQuery = supabase.from('tasks').update(patch).eq('id', taskId).eq('workspace_id', workspaceId)
+    if (!scope.elevated) updTaskQuery = updTaskQuery.eq('assigned_to', scope.memberId)
+    const { data, error } = await updTaskQuery
       .select(
         'id, title, status, priority, due_date, organization_id, contact_id, opportunity_id'
       )
@@ -1206,7 +1231,7 @@ async function runToolInner(
   }
 
   if (name === 'add_task_comment') {
-    const taskId = await resolveTaskId(workspaceId, str(args.task_title) ?? undefined)
+    const taskId = await resolveTaskId(scope, str(args.task_title) ?? undefined)
     if (!taskId)
       return { success: false, error: `Task "${args.task_title}" not found.` }
     const body = str(args.body)
@@ -1228,7 +1253,7 @@ async function runToolInner(
 
   if (name === 'add_opportunity_comment') {
     const oppId = await resolveOpportunityId(
-      workspaceId,
+      scope,
       str(args.opportunity_title) ?? undefined
     )
     if (!oppId)
@@ -1254,7 +1279,7 @@ async function runToolInner(
   }
 
   if (name === 'add_organization_comment') {
-    const orgId = await resolveOrgId(workspaceId, str(args.organization_name) ?? undefined)
+    const orgId = await resolveOrgId(scope, str(args.organization_name) ?? undefined)
     if (!orgId)
       return { success: false, error: `Company "${args.organization_name}" not found.` }
     const body = str(args.body)
@@ -1275,7 +1300,7 @@ async function runToolInner(
   }
 
   if (name === 'add_contact_comment') {
-    const contactId = await resolveContactId(workspaceId, str(args.contact_name) ?? undefined)
+    const contactId = await resolveContactId(scope, str(args.contact_name) ?? undefined)
     if (!contactId)
       return { success: false, error: `Contact "${args.contact_name}" not found.` }
     const body = str(args.body)
@@ -1300,7 +1325,7 @@ async function runToolInner(
     if (!target) return { success: false, error: 'first_name is required to find the contact.' }
     const fullTarget = `${target} ${str(args.last_name) ?? ''}`.trim()
     const contactId =
-      (await resolveContactId(workspaceId, fullTarget)) ?? (await resolveContactId(workspaceId, target))
+      (await resolveContactId(scope, fullTarget)) ?? (await resolveContactId(scope, target))
     if (!contactId)
       return { success: false, error: `Contact "${fullTarget}" not found.` }
     const patch: Record<string, unknown> = {}
@@ -1313,7 +1338,7 @@ async function runToolInner(
 
     const warnings: string[] = []
     if (str(args.organization_name)) {
-      const orgId = await resolveOrgId(workspaceId, str(args.organization_name)!)
+      const orgId = await resolveOrgId(scope, str(args.organization_name)!)
       if (orgId) patch.organization_id = orgId
       else warnings.push(`company "${args.organization_name}" not found`)
     }
@@ -1324,13 +1349,9 @@ async function runToolInner(
         error: 'Nothing to update.',
         ...(warnings.length ? { warnings } : {}),
       }
-    const { data, error } = await supabase
-      .from('contacts')
-      .update(patch)
-      .eq('id', contactId)
-      .eq('workspace_id', workspaceId)
-      .select('id, first_name, last_name')
-      .single()
+    let updContactQuery = supabase.from('contacts').update(patch).eq('id', contactId).eq('workspace_id', workspaceId)
+    if (!scope.elevated) updContactQuery = updContactQuery.eq('assigned_to', scope.memberId)
+    const { data, error } = await updContactQuery.select('id, first_name, last_name').single()
     if (error) return { success: false, error: error.message }
     revalidatePath('/contacts')
     revalidatePath(`/contacts/${contactId}`)
@@ -1344,36 +1365,27 @@ async function runToolInner(
       return { success: false, error: 'entity and name_or_id are required.' }
 
     if (entity === 'organization') {
-      const id = (await resolveOrgId(workspaceId, nameOrId)) ?? nameOrId
-      const { data, error } = await supabase
-        .from('organizations')
-        .select('*')
-        .eq('id', id)
-        .eq('workspace_id', workspaceId)
-        .maybeSingle()
+      const id = (await resolveOrgId(scope, nameOrId)) ?? nameOrId
+      let q = supabase.from('organizations').select('*').eq('id', id).eq('workspace_id', workspaceId)
+      if (!scope.elevated) q = q.eq('assigned_to', scope.memberId)
+      const { data, error } = await q.maybeSingle()
       if (error || !data) return { success: false, error: `Organization "${nameOrId}" not found.` }
       return { success: true, record: data }
     }
     if (entity === 'contact') {
-      const id = (await resolveContactId(workspaceId, nameOrId)) ?? nameOrId
-      const { data, error } = await supabase
-        .from('contacts')
-        .select('*')
-        .eq('id', id)
-        .eq('workspace_id', workspaceId)
-        .maybeSingle()
+      const id = (await resolveContactId(scope, nameOrId)) ?? nameOrId
+      let q = supabase.from('contacts').select('*').eq('id', id).eq('workspace_id', workspaceId)
+      if (!scope.elevated) q = q.eq('assigned_to', scope.memberId)
+      const { data, error } = await q.maybeSingle()
       if (error || !data) return { success: false, error: `Contact "${nameOrId}" not found.` }
       return { success: true, record: data }
     }
     if (entity === 'opportunity') {
-      const id = (await resolveOpportunityId(workspaceId, nameOrId)) ?? nameOrId
+      const id = (await resolveOpportunityId(scope, nameOrId)) ?? nameOrId
+      let q = supabase.from('opportunities').select('*').eq('id', id).eq('workspace_id', workspaceId)
+      if (!scope.elevated) q = q.eq('assigned_to', scope.memberId)
       const [{ data, error }, { data: comments }] = await Promise.all([
-        supabase
-          .from('opportunities')
-          .select('*')
-          .eq('id', id)
-          .eq('workspace_id', workspaceId)
-          .maybeSingle(),
+        q.maybeSingle(),
         supabase
           .from('opportunity_comments')
           .select('author, body, created_at')
@@ -1385,9 +1397,11 @@ async function runToolInner(
       return { success: true, record: data, comments: comments ?? [] }
     }
     if (entity === 'task') {
-      const id = (await resolveTaskId(workspaceId, nameOrId)) ?? nameOrId
+      const id = (await resolveTaskId(scope, nameOrId)) ?? nameOrId
+      let q = supabase.from('tasks').select('*').eq('id', id).eq('workspace_id', workspaceId)
+      if (!scope.elevated) q = q.eq('assigned_to', scope.memberId)
       const [{ data, error }, { data: comments }] = await Promise.all([
-        supabase.from('tasks').select('*').eq('id', id).eq('workspace_id', workspaceId).maybeSingle(),
+        q.maybeSingle(),
         supabase
           .from('task_comments')
           .select('author, body, created_at')
@@ -1402,56 +1416,48 @@ async function runToolInner(
   }
 
   if (name === 'archive_organization') {
-    const orgId = await resolveOrgId(workspaceId, str(args.organization_name) ?? undefined)
+    const orgId = await resolveOrgId(scope, str(args.organization_name) ?? undefined)
     if (!orgId)
       return { success: false, error: `Company "${args.organization_name}" not found.` }
-    const { error } = await supabase
-      .from('organizations')
-      .update({ archived: true })
-      .eq('id', orgId)
-      .eq('workspace_id', workspaceId)
+    let q = supabase.from('organizations').update({ archived: true }).eq('id', orgId).eq('workspace_id', workspaceId)
+    if (!scope.elevated) q = q.eq('assigned_to', scope.memberId)
+    const { error } = await q
     if (error) return { success: false, error: error.message }
     revalidatePath('/organizations')
     return { success: true, archived: { id: orgId } }
   }
 
   if (name === 'archive_contact') {
-    const contactId = await resolveContactId(workspaceId, str(args.contact_name) ?? undefined)
+    const contactId = await resolveContactId(scope, str(args.contact_name) ?? undefined)
     if (!contactId)
       return { success: false, error: `Contact "${args.contact_name}" not found.` }
-    const { error } = await supabase
-      .from('contacts')
-      .update({ archived: true })
-      .eq('id', contactId)
-      .eq('workspace_id', workspaceId)
+    let q = supabase.from('contacts').update({ archived: true }).eq('id', contactId).eq('workspace_id', workspaceId)
+    if (!scope.elevated) q = q.eq('assigned_to', scope.memberId)
+    const { error } = await q
     if (error) return { success: false, error: error.message }
     revalidatePath('/contacts')
     return { success: true, archived: { id: contactId } }
   }
 
   if (name === 'archive_opportunity') {
-    const oppId = await resolveOpportunityId(workspaceId, str(args.opportunity_title) ?? undefined)
+    const oppId = await resolveOpportunityId(scope, str(args.opportunity_title) ?? undefined)
     if (!oppId)
       return { success: false, error: `Opportunity "${args.opportunity_title}" not found.` }
-    const { error } = await supabase
-      .from('opportunities')
-      .update({ archived: true })
-      .eq('id', oppId)
-      .eq('workspace_id', workspaceId)
+    let q = supabase.from('opportunities').update({ archived: true }).eq('id', oppId).eq('workspace_id', workspaceId)
+    if (!scope.elevated) q = q.eq('assigned_to', scope.memberId)
+    const { error } = await q
     if (error) return { success: false, error: error.message }
     revalidatePath('/dashboard')
     return { success: true, archived: { id: oppId } }
   }
 
   if (name === 'archive_task') {
-    const taskId = await resolveTaskId(workspaceId, str(args.task_title) ?? undefined)
+    const taskId = await resolveTaskId(scope, str(args.task_title) ?? undefined)
     if (!taskId)
       return { success: false, error: `Task "${args.task_title}" not found.` }
-    const { error } = await supabase
-      .from('tasks')
-      .update({ archived: true })
-      .eq('id', taskId)
-      .eq('workspace_id', workspaceId)
+    let q = supabase.from('tasks').update({ archived: true }).eq('id', taskId).eq('workspace_id', workspaceId)
+    if (!scope.elevated) q = q.eq('assigned_to', scope.memberId)
+    const { error } = await q
     if (error) return { success: false, error: error.message }
     revalidatePath('/tasks')
     return { success: true, archived: { id: taskId } }

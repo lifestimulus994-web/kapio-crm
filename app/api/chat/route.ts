@@ -6,9 +6,10 @@ import {
   buildContext,
   loadKnowledge,
   DESTRUCTIVE_TOOLS,
+  type AiScope,
 } from '@/lib/crm-ai'
 import { parseGeorgianSchedule } from '@/lib/gschedule'
-import { getCurrentMember } from '@/lib/auth'
+import { getCurrentMember, hasElevatedAccess } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,6 +35,11 @@ function describeDestructive(name: string, args: Record<string, unknown>): strin
 export async function POST(req: Request) {
   const me = await getCurrentMember()
   if (!me) return NextResponse.json({ error: 'შესვლა საჭიროა' }, { status: 401 })
+  const scope: AiScope = {
+    workspaceId: me.workspace_id,
+    memberId: me.id,
+    elevated: hasElevatedAccess(me),
+  }
 
   if (!process.env.GEMINI_API_KEY) {
     return NextResponse.json(
@@ -59,7 +65,7 @@ export async function POST(req: Request) {
     if (!DESTRUCTIVE_TOOLS.has(name)) {
       return NextResponse.json({ error: 'Not a confirmable action.' }, { status: 400 })
     }
-    const result = await runTool(name, args ?? {}, me.workspace_id)
+    const result = await runTool(name, args ?? {}, scope)
     const reply = result.success
       ? `Done.`
       : `Couldn't do that: ${result.error ?? 'unknown error'}`
@@ -92,7 +98,7 @@ export async function POST(req: Request) {
     // about the actual records.
     const [knowledge, crmData] = await Promise.all([
       loadKnowledge(),
-      buildContext(me.workspace_id),
+      buildContext(scope),
     ])
 
     const systemInstruction = `You are the AI assistant for Kapio CRM, a sales CRM used by a company in Georgia.
@@ -293,7 +299,7 @@ Guidelines:
           continue
         }
 
-        const result = await runTool(name, args, me.workspace_id)
+        const result = await runTool(name, args, scope)
         executed.push({ name, result })
         responseParts.push({ functionResponse: { name, response: result } })
       }

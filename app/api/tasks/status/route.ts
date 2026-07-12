@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
-import { getCurrentMember } from '@/lib/auth'
+import { getCurrentMember, hasElevatedAccess } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
 
@@ -24,11 +24,13 @@ export async function POST(req: Request) {
       { status: 400 }
     )
   }
-  const { error } = await supabase
+  let query = supabase
     .from('tasks')
     .update({ status: body.status })
     .eq('id', body.id)
     .eq('workspace_id', me.workspace_id)
+  if (!hasElevatedAccess(me)) query = query.eq('assigned_to', me.id)
+  const { error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ ok: true })
 }

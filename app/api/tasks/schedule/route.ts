@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
-import { getCurrentMember } from '@/lib/auth'
+import { getCurrentMember, hasElevatedAccess } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
 
@@ -74,11 +74,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Nothing to update.' }, { status: 400 })
     }
 
-    const { data, error } = await supabase
+    let updateQuery = supabase
       .from('tasks')
       .update(patch)
       .eq('id', id)
       .eq('workspace_id', me.workspace_id)
+    if (!hasElevatedAccess(me)) updateQuery = updateQuery.eq('assigned_to', me.id)
+    const { data, error } = await updateQuery
       .select('id, title, start_at, end_at, start_date, due_date, status')
       .single()
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
@@ -92,6 +94,7 @@ export async function POST(req: Request) {
   }
   const insert: Record<string, unknown> = {
     workspace_id: me.workspace_id,
+    assigned_to: me.id,
     title,
     description: str(body.description),
     priority: PRIORITIES.includes(String(body.priority))
