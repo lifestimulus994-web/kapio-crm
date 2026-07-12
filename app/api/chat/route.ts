@@ -203,12 +203,17 @@ Guidelines:
     * use "official_name" as the company "name" (it fixes a misheard/misspelled
       name and keeps multi-word names intact — e.g. "ტერავი + პლიუსი" → the real
       "Teravita Plus");
-    * fill email, phone, website, and address (location) from the results.
-  In the organization's "notes", append: "⚠️ Name/email/phone/website/address
-  auto-found on the web on ${today} — VERIFY." In your reply, list what was
-  auto-filled (including the location), say it is unverified, and show source
-  link(s) if any. If nothing reliable was found, create the company with the
-  details the user gave and say the web lookup found nothing.
+    * fill email, phone, website, and address (location) from the results;
+    * fill "identification_code" from the results if present — it comes from
+      Georgia's official business registry (companyinfo.ge), so it does NOT
+      need a verify warning, unlike the web-sourced fields below.
+  In the organization's "notes", append: "⚠️ Email/phone/website/address
+  auto-found on the web on ${today} — VERIFY." (omit this note entirely if only
+  identification_code was found and nothing else). In your reply, list what was
+  auto-filled (including the location and identification code), say the
+  contact details are unverified, and show source link(s) if any. If nothing
+  reliable was found, create the company with the details the user gave and
+  say the lookup found nothing.
 - Never search for or store passwords or private credentials — those are not
   publicly available and must never be guessed.
 - After a tool runs, briefly confirm what changed. Never claim you changed

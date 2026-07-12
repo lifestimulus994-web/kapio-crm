@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { GoogleGenAI, Type, type FunctionDeclaration } from '@google/genai'
 import { supabase } from '@/lib/supabase'
 import { searchCompanyOnPlaces } from '@/lib/places'
+import { searchIdentificationCode } from '@/lib/companyinfo'
 
 // ---------- knowledge base ----------
 // Loads the editable business knowledge file (crm/knowledge.md) that teaches
@@ -90,6 +91,7 @@ type CompanyInfo = {
   phone: string
   website: string
   address: string
+  identification_code: string
   sources: string[]
 }
 
@@ -104,6 +106,7 @@ export async function findCompanyContacts(
       phone: '',
       website: '',
       address: '',
+      identification_code: '',
       sources: [],
     }
   }
@@ -111,9 +114,16 @@ export async function findCompanyContacts(
   // 1. Google Maps Places — authoritative name/phone/website/address (no email).
   const place = await searchCompanyOnPlaces(name, hint)
 
-  // 2. Gemini + Google Search — email and any gaps Places left. Seed it with the
-  //    corrected Places name (if any) so it looks up the right company.
-  const gem = await groundCompanyWithGemini(place.official_name || name, hint)
+  // 2. Gemini + Google Search — email and any gaps Places left, plus
+  //    companyinfo.ge — Georgia's business registry mirror, the only reliable
+  //    source for the identification/registration code (საიდენტიფიკაციო
+  //    კოდი), which neither Places nor a general web search returns. Both
+  //    seeded with the corrected Places name (if any) so they look up the
+  //    right company.
+  const [gem, registry] = await Promise.all([
+    groundCompanyWithGemini(place.official_name || name, hint),
+    searchIdentificationCode(place.official_name || name),
+  ])
 
   const sources = Array.from(
     new Set([place.maps_url, ...gem.sources].filter(Boolean))
@@ -124,7 +134,8 @@ export async function findCompanyContacts(
     email: gem.email || '', // Places never returns email
     phone: place.phone || gem.phone || '',
     website: place.website || gem.website || '',
-    address: place.address || gem.address || '',
+    address: place.address || gem.address || registry.address || '',
+    identification_code: registry.identification_code || '',
     sources,
   }
 }
@@ -140,6 +151,7 @@ async function groundCompanyWithGemini(
     phone: '',
     website: '',
     address: '',
+    identification_code: '',
     sources: [],
   }
   if (!name?.trim() || !process.env.GEMINI_API_KEY) return empty
@@ -227,6 +239,7 @@ Do NOT guess or fabricate. Never return passwords or private credentials.`
       phone: (parsed.phone ?? '').trim(),
       website: (parsed.website ?? '').trim(),
       address: (parsed.address ?? '').trim(),
+      identification_code: '',
       sources,
     }
   } catch {
@@ -395,7 +408,7 @@ export const tools: FunctionDeclaration[] = [
   {
     name: 'update_organization',
     description:
-      "Update an EXISTING organization/company, found by its current name. Use to FIX a wrong or misheard company name (set new_name) or to change email, phone, website, address, industry, notes, legal_name, or tax id. Pass only the fields you want to change. To correct a misheard name AND refill the details, FIRST call find_company_contacts with the corrected name, then call update_organization with new_name plus the found email/phone/website/address.",
+      "Update an EXISTING organization/company, found by its current name. Use to FIX a wrong or misheard company name (set new_name) or to change email, phone, website, address, industry, notes, legal_name, or tax id (identification_code). Pass only the fields you want to change. To correct a misheard name AND refill the details, FIRST call find_company_contacts with the corrected name, then call update_organization with new_name plus the found email/phone/website/address/identification_code.",
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -426,7 +439,7 @@ export const tools: FunctionDeclaration[] = [
   {
     name: 'find_company_contacts',
     description:
-      "Search the public web (Google) for a company's official details — corrected official name, email, phone, website, and address/location. Also fixes a misheard or misspelled name (useful for voice input). ALWAYS call this BEFORE create_organization when adding a company, so the record uses the correct name and is pre-filled. Returns best-effort public data that must be verified; it never finds passwords or private credentials.",
+      "Search the public web (Google) AND Georgia's official business registry (companyinfo.ge) for a company's details — corrected official name, email, phone, website, address/location, and identification_code (საიდენტიფიკაციო კოდი — the Georgian tax/registration ID). Also fixes a misheard or misspelled name (useful for voice input). ALWAYS call this BEFORE create_organization when adding a Georgian company, so the record uses the correct name, identification code, and is pre-filled. identification_code comes straight from the official registry and can be trusted; the rest is web-sourced and should be flagged as unverified.",
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -971,14 +984,14 @@ async function runToolInner(
       return { success: false, error: 'Company name is required.' }
     const found = await findCompanyContacts(company, str(args.hint) ?? undefined)
     const anything =
-      found.email || found.phone || found.website || found.address
+      found.email || found.phone || found.website || found.address || found.identification_code
     return {
       success: true,
       found,
       verified: false,
       note: anything
-        ? 'Public web data — use official_name for the company name; fill email/phone/website/address. Must be verified before relying on it.'
-        : 'Nothing reliable found on the public web for this company.',
+        ? 'Public data — use official_name for the company name; fill email/phone/website/address/identification_code. identification_code comes from the official Georgian business registry (companyinfo.ge) and can be trusted as-is; the rest is web-sourced and must be verified.'
+        : 'Nothing reliable found for this company.',
     }
   }
 
