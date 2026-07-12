@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
-import { requireMember } from '@/lib/auth'
+import { requireMember, hasElevatedAccess } from '@/lib/auth'
 import type { Task, TaskStatus } from '@/types'
 import { Plus, Calendar, User, Briefcase, CalendarDays, ListTodo } from 'lucide-react'
 import { formatDate, isOverdue } from '@/lib/utils'
@@ -14,7 +14,7 @@ const groups: TaskStatus[] = ['todo', 'in_progress', 'done']
 
 export default async function TasksPage() {
   const me = await requireMember()
-  const { data, error } = await supabase
+  let query = supabase
     .from('tasks')
     .select(
       '*, organization:organizations(id, name), contact:contacts(id, first_name, last_name), opportunity:opportunities(id, title)'
@@ -22,6 +22,12 @@ export default async function TasksPage() {
     .eq('workspace_id', me.workspace_id)
     .eq('archived', false)
     .order('due_date', { ascending: true, nullsFirst: false })
+
+  if (!hasElevatedAccess(me)) {
+    query = query.eq('assigned_to', me.id)
+  }
+
+  const { data, error } = await query
 
   if (error) {
     return (

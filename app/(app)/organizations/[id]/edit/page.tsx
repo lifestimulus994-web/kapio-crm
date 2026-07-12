@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
-import { requireMember } from '@/lib/auth'
+import { requireMember, hasElevatedAccess } from '@/lib/auth'
 import type { Organization } from '@/types'
 import { ChevronLeft, Trash2 } from 'lucide-react'
 
@@ -20,12 +20,9 @@ export default async function EditOrganizationPage({
   const { id } = await params
   const me = await requireMember()
 
-  const { data, error } = await supabase
-    .from('organizations')
-    .select('*')
-    .eq('id', id)
-    .eq('workspace_id', me.workspace_id)
-    .single()
+  let query = supabase.from('organizations').select('*').eq('id', id).eq('workspace_id', me.workspace_id)
+  if (!hasElevatedAccess(me)) query = query.eq('assigned_to', me.id)
+  const { data, error } = await query.single()
 
   if (error || !data) {
     return <div className="p-8 text-red-400 text-sm">Organization not found</div>

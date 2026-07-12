@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
-import { requireMember } from '@/lib/auth'
+import { requireMember, hasElevatedAccess } from '@/lib/auth'
 import { ChevronLeft } from 'lucide-react'
 import PasteImport from '@/components/leads/PasteImport'
 
@@ -14,7 +14,7 @@ const label = 'block text-xs font-medium text-slate-400 mb-1.5'
 
 export default async function NewLeadPage() {
   const me = await requireMember()
-  const isOwner = me.role === 'owner'
+  const isOwner = hasElevatedAccess(me)
 
   const { data: membersData } = isOwner
     ? await supabase

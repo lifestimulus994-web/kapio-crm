@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase'
-import { requireMember } from '@/lib/auth'
+import { requireMember, hasElevatedAccess } from '@/lib/auth'
 import type { Contact } from '@/types'
 import { fullName } from '@/lib/utils'
 import RecordsTable, { type TableRow } from '@/components/RecordsTable'
@@ -8,12 +8,19 @@ export const dynamic = 'force-dynamic'
 
 export default async function ContactsPage() {
   const me = await requireMember()
-  const { data, error } = await supabase
+  const elevated = hasElevatedAccess(me)
+  let query = supabase
     .from('contacts')
-    .select('*, organization:organizations(id, name)')
+    .select('*, organization:organizations(id, name), assignee:members(id, full_name, email)')
     .eq('workspace_id', me.workspace_id)
     .eq('archived', false)
     .order('first_name')
+
+  if (!elevated) {
+    query = query.eq('assigned_to', me.id)
+  }
+
+  const { data, error } = await query
 
   if (error) {
     return (
@@ -43,6 +50,9 @@ export default async function ContactsPage() {
         value: c.email ?? '',
         href: c.email ? `mailto:${c.email}` : undefined,
       },
+      ...(elevated
+        ? [{ value: c.assignee?.full_name || c.assignee?.email || 'Unassigned' }]
+        : []),
     ],
     searchText: [
       fullName(c),
@@ -50,6 +60,7 @@ export default async function ContactsPage() {
       c.email,
       c.phone,
       c.organization?.name,
+      c.assignee?.full_name,
     ]
       .filter(Boolean)
       .join(' ')
@@ -59,7 +70,7 @@ export default async function ContactsPage() {
   return (
     <RecordsTable
       rows={rows}
-      columns={['Organization', 'Phone', 'Email']}
+      columns={elevated ? ['Organization', 'Phone', 'Email', 'Assigned to'] : ['Organization', 'Phone', 'Email']}
       tabs={[
         { label: 'Organizations', href: '/organizations' },
         { label: 'Contacts', href: '/contacts', active: true },

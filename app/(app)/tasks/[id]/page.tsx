@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
-import { requireMember } from '@/lib/auth'
+import { requireMember, hasElevatedAccess } from '@/lib/auth'
 import type { Task, TaskComment, TaskStatus } from '@/types'
 import {
   ChevronLeft,
@@ -10,6 +10,7 @@ import {
   Calendar,
   Flag,
   User,
+  Users,
   Briefcase,
   Building2,
   Check,
@@ -27,22 +28,32 @@ export default async function TaskDetailPage({
 }) {
   const { id } = await params
   const me = await requireMember()
+  const elevated = hasElevatedAccess(me)
 
-  const [taskRes, commentsRes] = await Promise.all([
-    supabase
-      .from('tasks')
-      .select(
-        '*, organization:organizations(id, name), contact:contacts(id, first_name, last_name), opportunity:opportunities(id, title)'
-      )
-      .eq('id', id)
-      .eq('workspace_id', me.workspace_id)
-      .single(),
+  let taskQuery = supabase
+    .from('tasks')
+    .select(
+      '*, organization:organizations(id, name), contact:contacts(id, first_name, last_name), opportunity:opportunities(id, title), assignee:members(id, full_name, email)'
+    )
+    .eq('id', id)
+    .eq('workspace_id', me.workspace_id)
+  if (!elevated) taskQuery = taskQuery.eq('assigned_to', me.id)
+
+  const [taskRes, commentsRes, membersRes] = await Promise.all([
+    taskQuery.single(),
     supabase
       .from('task_comments')
       .select('*')
       .eq('task_id', id)
       .eq('workspace_id', me.workspace_id)
       .order('created_at', { ascending: true }),
+    elevated
+      ? supabase
+          .from('members')
+          .select('id, full_name, email')
+          .eq('workspace_id', me.workspace_id)
+          .order('full_name')
+      : Promise.resolve({ data: null, error: null }),
   ])
 
   if (taskRes.error || !taskRes.data) {
@@ -54,6 +65,7 @@ export default async function TaskDetailPage({
   const comments = (commentsRes.error ? [] : commentsRes.data ?? []) as TaskComment[]
   const commentsReady = !commentsRes.error
   const overdue = isOverdue(task.due_date, task.status)
+  const members = (membersRes.data ?? []) as { id: string; full_name: string | null; email: string }[]
 
   async function advanceStatus() {
     'use server'
@@ -80,6 +92,45 @@ export default async function TaskDetailPage({
       .insert({ task_id: id, workspace_id: owner.workspace_id, author, body })
     if (error) throw new Error(error.message)
     revalidatePath(`/tasks/${id}`)
+  }
+
+  async function assign(formData: FormData) {
+    'use server'
+    const current = await requireMember()
+    if (!hasElevatedAccess(current)) return
+    const newAssignee = (formData.get('assigned_to') as string) || null
+
+    const { data: before } = await supabase
+      .from('tasks')
+      .select('assigned_to, assignee:members(full_name, email)')
+      .eq('id', id)
+      .eq('workspace_id', current.workspace_id)
+      .single()
+
+    const { error } = await supabase
+      .from('tasks')
+      .update({ assigned_to: newAssignee })
+      .eq('id', id)
+      .eq('workspace_id', current.workspace_id)
+    if (error) throw new Error(error.message)
+
+    if (before && before.assigned_to !== newAssignee) {
+      const prev = before.assignee as unknown as { full_name: string | null; email: string } | null
+      const { data: next } = newAssignee
+        ? await supabase.from('members').select('full_name, email').eq('id', newAssignee).single()
+        : { data: null }
+      const prevName = prev ? prev.full_name || prev.email : 'Unassigned'
+      const nextName = next ? next.full_name || next.email : 'Unassigned'
+      await supabase.from('task_comments').insert({
+        task_id: id,
+        workspace_id: current.workspace_id,
+        author: current.full_name || current.email,
+        body: `Reassigned from ${prevName} to ${nextName}`,
+      })
+    }
+
+    revalidatePath(`/tasks/${id}`)
+    revalidatePath('/tasks')
   }
 
   const meta = statusMeta[task.status]
@@ -260,6 +311,39 @@ export default async function TaskDetailPage({
                 {fullName(task.contact)}
               </Link>
             </div>
+          )}
+
+          {/* Assignment (owner/manager only) */}
+          {elevated && (
+            <form
+              action={assign}
+              className="bg-slate-800/40 border border-slate-700/60 rounded-xl px-3.5 py-3"
+            >
+              <span className="inline-flex items-center gap-2 mb-1.5 text-xs text-slate-500">
+                <Users size={13} />
+                Assigned to
+              </span>
+              <div className="flex gap-2">
+                <select
+                  name="assigned_to"
+                  defaultValue={task.assigned_to ?? ''}
+                  className="flex-1 bg-slate-800 border border-slate-700 rounded-md px-2 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/70"
+                >
+                  <option value="">— Unassigned —</option>
+                  {members.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.full_name || m.email}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="submit"
+                  className="px-3 py-1.5 rounded-md text-xs font-medium bg-emerald-600 hover:bg-emerald-500 text-white transition-colors flex-none"
+                >
+                  Save
+                </button>
+              </div>
+            </form>
           )}
         </div>
       </div>

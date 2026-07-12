@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
-import { requireMember } from '@/lib/auth'
+import { requireMember, hasElevatedAccess } from '@/lib/auth'
 import type { Organization, Contact, Opportunity } from '@/types'
 import { STAGES } from '@/types'
 import { ChevronLeft, Trash2 } from 'lucide-react'
@@ -20,15 +20,26 @@ export default async function EditOpportunityPage({
 }) {
   const { id } = await params
   const me = await requireMember()
+  const elevated = hasElevatedAccess(me)
 
-  const [oppRes, orgsRes, contactsRes] = await Promise.all([
-    supabase.from('opportunities').select('*').eq('id', id).eq('workspace_id', me.workspace_id).single(),
+  let oppQuery = supabase.from('opportunities').select('*').eq('id', id).eq('workspace_id', me.workspace_id)
+  if (!elevated) oppQuery = oppQuery.eq('assigned_to', me.id)
+
+  const [oppRes, orgsRes, contactsRes, membersRes] = await Promise.all([
+    oppQuery.single(),
     supabase.from('organizations').select('id, name').eq('workspace_id', me.workspace_id).order('name'),
     supabase
       .from('contacts')
       .select('id, first_name, last_name')
       .eq('workspace_id', me.workspace_id)
       .order('first_name'),
+    elevated
+      ? supabase
+          .from('members')
+          .select('id, full_name, email')
+          .eq('workspace_id', me.workspace_id)
+          .order('full_name')
+      : Promise.resolve({ data: [] }),
   ])
 
   if (oppRes.error || !oppRes.data) {
@@ -41,16 +52,19 @@ export default async function EditOpportunityPage({
     Contact,
     'id' | 'first_name' | 'last_name'
   >[]
+  const members = membersRes.data ?? []
 
   async function update(formData: FormData) {
     'use server'
     const owner = await requireMember()
+    const elevatedOwner = hasElevatedAccess(owner)
+    const stage = (formData.get('stage') as string) || 'New Lead'
     const base = {
       title: formData.get('title') as string,
       organization_id: (formData.get('organization_id') as string) || null,
       contact_id: (formData.get('contact_id') as string) || null,
       value_gel: parseFloat(formData.get('value_gel') as string) || 0,
-      stage: (formData.get('stage') as string) || 'New Lead',
+      stage,
       next_action: (formData.get('next_action') as string) || null,
       pain_points: (formData.get('pain_points') as string) || null,
       notes: (formData.get('notes') as string) || null,
@@ -62,14 +76,28 @@ export default async function EditOpportunityPage({
       start_date: (formData.get('start_date') as string) || null,
       close_date: (formData.get('close_date') as string) || null,
     }
+    // Roles/assignment fields exist only after the manager-role migration.
+    const roleFields = {
+      lost_reason: stage === 'Lost' ? (formData.get('lost_reason') as string) || null : null,
+      ...(elevatedOwner
+        ? { assigned_to: (formData.get('assigned_to') as string) || null }
+        : {}),
+    }
 
     let { error } = await supabase
       .from('opportunities')
-      .update({ ...base, ...extra })
+      .update({ ...base, ...extra, ...roleFields })
       .eq('id', id)
       .eq('workspace_id', owner.workspace_id)
-    // If the new columns aren't migrated yet, retry without them so the save
-    // still succeeds.
+    // If the newest columns aren't migrated yet, retry with progressively
+    // fewer optional fields so the save still succeeds.
+    if (error && /column .* does not exist/i.test(error.message)) {
+      ;({ error } = await supabase
+        .from('opportunities')
+        .update({ ...base, ...extra })
+        .eq('id', id)
+        .eq('workspace_id', owner.workspace_id))
+    }
     if (error && /column .* does not exist/i.test(error.message)) {
       ;({ error } = await supabase
         .from('opportunities')
@@ -163,6 +191,32 @@ export default async function EditOpportunityPage({
               </select>
             </div>
           </div>
+          <div>
+            <label className={label}>Lost Reason (if Stage = Lost)</label>
+            <select name="lost_reason" defaultValue={opp.lost_reason ?? ''} className={input}>
+              <option value="">— None —</option>
+              <option value="Price too high">Price too high</option>
+              <option value="Competitor">Competitor</option>
+              <option value="No budget">No budget</option>
+              <option value="No response">No response</option>
+              <option value="Timing">Timing</option>
+              <option value="Not qualified">Not qualified</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          {elevated && (
+            <div>
+              <label className={label}>Assigned to</label>
+              <select name="assigned_to" defaultValue={opp.assigned_to ?? ''} className={input}>
+                <option value="">— Unassigned —</option>
+                {members.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.full_name || m.email}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </section>
 
         {/* Links */}

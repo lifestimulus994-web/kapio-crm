@@ -2,17 +2,36 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
-import { requireMember } from '@/lib/auth'
+import { requireMember, hasElevatedAccess } from '@/lib/auth'
 import { ChevronLeft } from 'lucide-react'
+
+export const dynamic = 'force-dynamic'
 
 const input =
   'w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/70 focus:border-emerald-500/50 transition-colors'
 const label = 'block text-xs font-medium text-slate-400 mb-1.5'
 
-export default function NewOrganizationPage() {
+export default async function NewOrganizationPage() {
+  const me = await requireMember()
+  const elevated = hasElevatedAccess(me)
+
+  const members = elevated
+    ? (
+        await supabase
+          .from('members')
+          .select('id, full_name, email')
+          .eq('workspace_id', me.workspace_id)
+          .order('full_name')
+      ).data ?? []
+    : []
+
   async function create(formData: FormData) {
     'use server'
     const me = await requireMember()
+    const elevated = hasElevatedAccess(me)
+    const assignedTo = elevated
+      ? (formData.get('assigned_to') as string) || null
+      : me.id
     const { error } = await supabase.from('organizations').insert({
       workspace_id: me.workspace_id,
       name: formData.get('name') as string,
@@ -24,6 +43,7 @@ export default function NewOrganizationPage() {
       website: (formData.get('website') as string) || null,
       address: (formData.get('address') as string) || null,
       notes: (formData.get('notes') as string) || null,
+      assigned_to: assignedTo,
     })
     if (error) throw new Error(error.message)
     revalidatePath('/organizations')
@@ -94,6 +114,19 @@ export default function NewOrganizationPage() {
                 placeholder="Technology, Finance..."
               />
             </div>
+            {elevated && (
+              <div>
+                <label className={label}>Assigned to</label>
+                <select name="assigned_to" defaultValue={me.id} className={input}>
+                  <option value="">— Unassigned —</option>
+                  {members.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.full_name || m.email}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
         </section>
 

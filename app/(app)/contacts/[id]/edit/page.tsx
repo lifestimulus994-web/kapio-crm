@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
-import { requireMember } from '@/lib/auth'
+import { requireMember, hasElevatedAccess } from '@/lib/auth'
 import type { Contact, Organization } from '@/types'
 import { ChevronLeft, Trash2 } from 'lucide-react'
 
@@ -20,8 +20,11 @@ export default async function EditContactPage({
   const { id } = await params
   const me = await requireMember()
 
+  let contactQuery = supabase.from('contacts').select('*').eq('id', id).eq('workspace_id', me.workspace_id)
+  if (!hasElevatedAccess(me)) contactQuery = contactQuery.eq('assigned_to', me.id)
+
   const [contactRes, orgsRes] = await Promise.all([
-    supabase.from('contacts').select('*').eq('id', id).eq('workspace_id', me.workspace_id).single(),
+    contactQuery.single(),
     supabase.from('organizations').select('id, name').eq('workspace_id', me.workspace_id).order('name'),
   ])
 

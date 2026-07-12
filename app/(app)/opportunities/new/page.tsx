@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
-import { requireMember } from '@/lib/auth'
+import { requireMember, hasElevatedAccess } from '@/lib/auth'
 import type { Organization, Contact } from '@/types'
 import { STAGES } from '@/types'
 import { ChevronLeft } from 'lucide-react'
@@ -15,13 +15,21 @@ const label = 'block text-xs font-medium text-slate-400 mb-1.5'
 
 export default async function NewOpportunityPage() {
   const me = await requireMember()
-  const [orgsRes, contactsRes] = await Promise.all([
+  const elevated = hasElevatedAccess(me)
+  const [orgsRes, contactsRes, membersRes] = await Promise.all([
     supabase.from('organizations').select('id, name').eq('workspace_id', me.workspace_id).order('name'),
     supabase
       .from('contacts')
       .select('id, first_name, last_name')
       .eq('workspace_id', me.workspace_id)
       .order('first_name'),
+    elevated
+      ? supabase
+          .from('members')
+          .select('id, full_name, email')
+          .eq('workspace_id', me.workspace_id)
+          .order('full_name')
+      : Promise.resolve({ data: [] }),
   ])
 
   const orgs = (orgsRes.data ?? []) as Pick<Organization, 'id' | 'name'>[]
@@ -29,10 +37,15 @@ export default async function NewOpportunityPage() {
     Contact,
     'id' | 'first_name' | 'last_name'
   >[]
+  const members = membersRes.data ?? []
 
   async function create(formData: FormData) {
     'use server'
     const owner = await requireMember()
+    const elevated = hasElevatedAccess(owner)
+    const assignedTo = elevated
+      ? (formData.get('assigned_to') as string) || null
+      : owner.id
     const { error } = await supabase.from('opportunities').insert({
       workspace_id: owner.workspace_id,
       title: formData.get('title') as string,
@@ -43,6 +56,7 @@ export default async function NewOpportunityPage() {
       next_action: (formData.get('next_action') as string) || null,
       pain_points: (formData.get('pain_points') as string) || null,
       notes: (formData.get('notes') as string) || null,
+      assigned_to: assignedTo,
     })
     if (error) throw new Error(error.message)
     revalidatePath('/dashboard')
@@ -106,6 +120,19 @@ export default async function NewOpportunityPage() {
                 ))}
               </select>
             </div>
+            {elevated && (
+              <div>
+                <label className={label}>Assigned to</label>
+                <select name="assigned_to" defaultValue={me.id} className={input}>
+                  <option value="">— Unassigned —</option>
+                  {members.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.full_name || m.email}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
         </section>
 

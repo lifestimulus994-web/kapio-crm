@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
-import { requireMember } from '@/lib/auth'
+import { requireMember, hasElevatedAccess } from '@/lib/auth'
 import type { Task, Organization, Contact, Opportunity } from '@/types'
 import { CalendarDays, ListTodo, Plus } from 'lucide-react'
 import TaskCalendar from '@/components/TaskCalendar'
@@ -9,14 +9,19 @@ export const dynamic = 'force-dynamic'
 
 export default async function TasksCalendarPage() {
   const me = await requireMember()
+  let tasksQuery = supabase
+    .from('tasks')
+    .select(
+      '*, organization:organizations(id, name), contact:contacts(id, first_name, last_name), opportunity:opportunities(id, title)'
+    )
+    .eq('workspace_id', me.workspace_id)
+    .eq('archived', false)
+  if (!hasElevatedAccess(me)) {
+    tasksQuery = tasksQuery.eq('assigned_to', me.id)
+  }
+
   const [tasksRes, orgsRes, contactsRes, oppsRes] = await Promise.all([
-    supabase
-      .from('tasks')
-      .select(
-        '*, organization:organizations(id, name), contact:contacts(id, first_name, last_name), opportunity:opportunities(id, title)'
-      )
-      .eq('workspace_id', me.workspace_id)
-      .eq('archived', false),
+    tasksQuery,
     supabase.from('organizations').select('id, name').eq('workspace_id', me.workspace_id).order('name'),
     supabase
       .from('contacts')

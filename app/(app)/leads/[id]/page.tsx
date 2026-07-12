@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
-import { requireMember } from '@/lib/auth'
+import { requireMember, hasElevatedAccess } from '@/lib/auth'
 import { LEAD_STATUSES, type Lead } from '@/types'
 import { ChevronLeft, Mail, Phone, Building2, Megaphone } from 'lucide-react'
 import { formatDateTime } from '@/lib/utils'
@@ -22,7 +22,7 @@ export default async function LeadDetailPage({
 }) {
   const { id } = await params
   const me = await requireMember()
-  const isOwner = me.role === 'owner'
+  const isOwner = hasElevatedAccess(me)
 
   let leadQuery = supabase
     .from('leads')
@@ -55,7 +55,7 @@ export default async function LeadDetailPage({
   async function assign(formData: FormData) {
     'use server'
     const current = await requireMember()
-    if (current.role !== 'owner') return
+    if (!hasElevatedAccess(current)) return
     const assignedTo = (formData.get('assigned_to') as string) || null
     const { error } = await supabase
       .from('leads')

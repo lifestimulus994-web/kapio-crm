@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase'
-import { requireMember } from '@/lib/auth'
+import { requireMember, hasElevatedAccess } from '@/lib/auth'
 import type { Lead } from '@/types'
 import RecordsTable, { type TableRow } from '@/components/RecordsTable'
 
@@ -14,6 +14,7 @@ const statusLabel: Record<string, string> = {
 
 export default async function LeadsPage() {
   const me = await requireMember()
+  const elevated = hasElevatedAccess(me)
 
   let query = supabase
     .from('leads')
@@ -21,7 +22,7 @@ export default async function LeadsPage() {
     .eq('workspace_id', me.workspace_id)
     .order('created_at', { ascending: false })
 
-  if (me.role !== 'owner') {
+  if (!elevated) {
     query = query.eq('assigned_to', me.id)
   }
 
@@ -64,7 +65,7 @@ export default async function LeadsPage() {
       searchPlaceholder="Search leads…"
       avatarVariant="contact"
       emptyText={
-        me.role === 'owner'
+        elevated
           ? 'No leads yet. Add your first one.'
           : 'No leads assigned to you yet.'
       }

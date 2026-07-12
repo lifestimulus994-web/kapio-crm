@@ -9,7 +9,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'მხოლოდ owner-ს შეუძლია წევრის დამატება' }, { status: 403 })
   }
 
-  const { email, password, full_name } = await request.json()
+  const { email, password, full_name, role } = await request.json()
 
   if (!email || !password || String(password).length < 6) {
     return NextResponse.json(
@@ -18,18 +18,23 @@ export async function POST(request: Request) {
     )
   }
 
+  // Never trust the client for anything beyond 'manager' vs 'member' — an
+  // invite can never grant 'owner'.
+  const invitedRole = role === 'manager' ? 'manager' : 'member'
+
   // user_metadata.invited_workspace_id tells the DB trigger (handle_new_user
   // in schema.sql) to join this new auth user to the inviting owner's
-  // workspace as a member, instead of provisioning a brand-new workspace the
-  // way a public self-signup would. The trigger is the only writer of the
-  // members row for this user — no separate insert here, so there's no
-  // duplicate-key race between the two.
+  // workspace as a member/manager, instead of provisioning a brand-new
+  // workspace the way a public self-signup would. The trigger is the only
+  // writer of the members row for this user — no separate insert here, so
+  // there's no duplicate-key race between the two.
   const { data: created, error: createError } = await admin.auth.admin.createUser({
     email,
     password,
     email_confirm: true,
     user_metadata: {
       invited_workspace_id: me.workspace_id,
+      invited_role: invitedRole,
       full_name: full_name || null,
     },
   })

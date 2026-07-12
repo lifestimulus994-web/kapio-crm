@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
-import { requireMember } from '@/lib/auth'
+import { requireMember, hasElevatedAccess } from '@/lib/auth'
 import type { Organization, Contact, Opportunity } from '@/types'
 import { TASK_PRIORITIES } from '@/types'
 import { ChevronLeft } from 'lucide-react'
@@ -21,8 +21,9 @@ export default async function NewTaskPage({
 }) {
   const sp = await searchParams
   const me = await requireMember()
+  const elevated = hasElevatedAccess(me)
 
-  const [orgsRes, contactsRes, oppsRes] = await Promise.all([
+  const [orgsRes, contactsRes, oppsRes, membersRes] = await Promise.all([
     supabase.from('organizations').select('id, name').eq('workspace_id', me.workspace_id).order('name'),
     supabase
       .from('contacts')
@@ -34,6 +35,13 @@ export default async function NewTaskPage({
       .select('id, title')
       .eq('workspace_id', me.workspace_id)
       .order('created_at', { ascending: false }),
+    elevated
+      ? supabase
+          .from('members')
+          .select('id, full_name, email')
+          .eq('workspace_id', me.workspace_id)
+          .order('full_name')
+      : Promise.resolve({ data: [] }),
   ])
 
   const orgs = (orgsRes.data ?? []) as Pick<Organization, 'id' | 'name'>[]
@@ -42,10 +50,15 @@ export default async function NewTaskPage({
     'id' | 'first_name' | 'last_name'
   >[]
   const opps = (oppsRes.data ?? []) as Pick<Opportunity, 'id' | 'title'>[]
+  const members = membersRes.data ?? []
 
   async function create(formData: FormData) {
     'use server'
     const owner = await requireMember()
+    const elevated = hasElevatedAccess(owner)
+    const assignedTo = elevated
+      ? (formData.get('assigned_to') as string) || null
+      : owner.id
     const startDate = (formData.get('start_date') as string) || null
     const startTime = (formData.get('start_time') as string) || ''
     const durationMin = parseInt((formData.get('duration') as string) || '0', 10)
@@ -78,6 +91,7 @@ export default async function NewTaskPage({
         opportunity_id: (formData.get('opportunity_id') as string) || null,
         organization_id: (formData.get('organization_id') as string) || null,
         contact_id: (formData.get('contact_id') as string) || null,
+        assigned_to: assignedTo,
       })
     if (error) throw new Error(error.message)
     revalidatePath('/tasks')
@@ -176,6 +190,19 @@ export default async function NewTaskPage({
                 placeholder="Responsible person"
               />
             </div>
+            {elevated && (
+              <div>
+                <label className={label}>Assigned to</label>
+                <select name="assigned_to" defaultValue={me.id} className={input}>
+                  <option value="">— Unassigned —</option>
+                  {members.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.full_name || m.email}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
         </section>
 

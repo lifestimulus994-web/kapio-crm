@@ -224,21 +224,27 @@ create index if not exists idx_leads_workspace          on public.leads(workspac
 --     invited_workspace_id in the user's metadata.
 --   - Owner-invited teammate (app/api/team/route.ts, admin.auth.admin.createUser):
 --     that route passes user_metadata.invited_workspace_id = the inviting
---     owner's workspace_id, so this trigger joins them to THAT workspace
---     instead of minting a new one, role 'member'. The route itself does NOT
---     insert into members separately — this trigger is the only writer, so
---     there's no duplicate-key race between the two.
+--     owner's workspace_id (plus invited_role = 'manager'|'member', default
+--     'member' — an invite can never grant 'owner'), so this trigger joins
+--     them to THAT workspace instead of minting a new one. The route itself
+--     does NOT insert into members separately — this trigger is the only
+--     writer, so there's no duplicate-key race between the two.
 create or replace function public.handle_new_user()
 returns trigger as $$
 declare
   new_workspace_id uuid;
   invited_id uuid;
+  invited_role text;
 begin
   invited_id := (new.raw_user_meta_data->>'invited_workspace_id')::uuid;
 
   if invited_id is not null then
+    invited_role := case
+      when new.raw_user_meta_data->>'invited_role' = 'manager' then 'manager'
+      else 'member'
+    end;
     insert into public.members (id, workspace_id, email, full_name, role)
-    values (new.id, invited_id, new.email, new.raw_user_meta_data->>'full_name', 'member')
+    values (new.id, invited_id, new.email, new.raw_user_meta_data->>'full_name', invited_role)
     on conflict (id) do nothing;
     return new;
   end if;
@@ -298,3 +304,29 @@ create trigger on_auth_user_created
 -- alter table public.contact_comments      alter column workspace_id set not null;
 -- alter table public.opportunity_comments  alter column workspace_id set not null;
 -- alter table public.task_comments         alter column workspace_id set not null;
+
+-- ============================================================================
+-- Roles + per-record ownership/visibility: a third 'manager' role (sees/edits
+-- everything an owner can within their workspace, minus workspace-level
+-- actions like billing or removing an owner/manager) plus an assigned_to FK
+-- on the core entities, mirroring the leads.assigned_to pattern already in
+-- use — a plain 'member' only sees records assigned to them (enforced in app
+-- code); owner/manager see everything in the workspace.
+-- ============================================================================
+alter table public.members drop constraint if exists members_role_check;
+alter table public.members add constraint members_role_check
+  check (role in ('owner', 'manager', 'member'));
+
+alter table public.organizations add column if not exists assigned_to uuid references public.members(id) on delete set null;
+alter table public.contacts      add column if not exists assigned_to uuid references public.members(id) on delete set null;
+alter table public.opportunities add column if not exists assigned_to uuid references public.members(id) on delete set null;
+alter table public.tasks         add column if not exists assigned_to uuid references public.members(id) on delete set null;
+
+create index if not exists idx_organizations_assigned on public.organizations(assigned_to);
+create index if not exists idx_contacts_assigned       on public.contacts(assigned_to);
+create index if not exists idx_opportunities_assigned  on public.opportunities(assigned_to);
+create index if not exists idx_tasks_assigned          on public.tasks(assigned_to);
+
+-- Required reason when a deal is marked Lost — surfaces "why we lose deals"
+-- analysis instead of just a stage change.
+alter table public.opportunities add column if not exists lost_reason text;

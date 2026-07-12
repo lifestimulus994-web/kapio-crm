@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
-import { requireMember } from '@/lib/auth'
+import { requireMember, hasElevatedAccess } from '@/lib/auth'
 import { STAGES, type Opportunity, type Task, type OpportunityComment } from '@/types'
 import CommentThread from '@/components/CommentThread'
 import {
@@ -9,6 +9,7 @@ import {
   Pencil,
   Building2,
   User,
+  Users,
   Mail,
   Phone,
   Calendar,
@@ -43,16 +44,19 @@ export default async function OpportunityDetailPage({
 }) {
   const { id } = await params
   const me = await requireMember()
+  const elevated = hasElevatedAccess(me)
 
-  const [oppRes, tasksRes, commentsRes] = await Promise.all([
-    supabase
-      .from('opportunities')
-      .select(
-        '*, organization:organizations(id, name, email, phone), contact:contacts(id, first_name, last_name, phone, email)'
-      )
-      .eq('id', id)
-      .eq('workspace_id', me.workspace_id)
-      .single(),
+  let oppQuery = supabase
+    .from('opportunities')
+    .select(
+      '*, organization:organizations(id, name, email, phone), contact:contacts(id, first_name, last_name, phone, email), assignee:members(id, full_name, email)'
+    )
+    .eq('id', id)
+    .eq('workspace_id', me.workspace_id)
+  if (!elevated) oppQuery = oppQuery.eq('assigned_to', me.id)
+
+  const [oppRes, tasksRes, commentsRes, membersRes] = await Promise.all([
+    oppQuery.single(),
     supabase
       .from('tasks')
       .select('*')
@@ -65,6 +69,13 @@ export default async function OpportunityDetailPage({
       .eq('opportunity_id', id)
       .eq('workspace_id', me.workspace_id)
       .order('created_at', { ascending: true }),
+    elevated
+      ? supabase
+          .from('members')
+          .select('id, full_name, email')
+          .eq('workspace_id', me.workspace_id)
+          .order('full_name')
+      : Promise.resolve({ data: null, error: null }),
   ])
 
   if (oppRes.error || !oppRes.data) {
@@ -78,15 +89,22 @@ export default async function OpportunityDetailPage({
   // If the comments table isn't migrated yet, degrade gracefully.
   const comments = (commentsRes.error ? [] : commentsRes.data ?? []) as OpportunityComment[]
   const commentsReady = !commentsRes.error
+  const members = (membersRes.data ?? []) as { id: string; full_name: string | null; email: string }[]
 
   async function setStage(formData: FormData) {
     'use server'
     const owner = await requireMember()
     const stage = formData.get('stage') as string
     if (!STAGES.includes(stage as (typeof STAGES)[number])) return
+    const patch: Record<string, unknown> = { stage }
+    if (stage === 'Lost') {
+      const reason = (formData.get('lost_reason') as string)?.trim()
+      if (!reason) return
+      patch.lost_reason = reason
+    }
     const { error } = await supabase
       .from('opportunities')
-      .update({ stage })
+      .update(patch)
       .eq('id', id)
       .eq('workspace_id', owner.workspace_id)
     if (error) throw new Error(error.message)
@@ -105,6 +123,45 @@ export default async function OpportunityDetailPage({
       .insert({ opportunity_id: id, workspace_id: owner.workspace_id, author, body })
     if (error) throw new Error(error.message)
     revalidatePath(`/opportunities/${id}`)
+  }
+
+  async function assign(formData: FormData) {
+    'use server'
+    const current = await requireMember()
+    if (!hasElevatedAccess(current)) return
+    const newAssignee = (formData.get('assigned_to') as string) || null
+
+    const { data: before } = await supabase
+      .from('opportunities')
+      .select('assigned_to, assignee:members(full_name, email)')
+      .eq('id', id)
+      .eq('workspace_id', current.workspace_id)
+      .single()
+
+    const { error } = await supabase
+      .from('opportunities')
+      .update({ assigned_to: newAssignee })
+      .eq('id', id)
+      .eq('workspace_id', current.workspace_id)
+    if (error) throw new Error(error.message)
+
+    if (before && before.assigned_to !== newAssignee) {
+      const prev = before.assignee as unknown as { full_name: string | null; email: string } | null
+      const { data: next } = newAssignee
+        ? await supabase.from('members').select('full_name, email').eq('id', newAssignee).single()
+        : { data: null }
+      const prevName = prev ? prev.full_name || prev.email : 'Unassigned'
+      const nextName = next ? next.full_name || next.email : 'Unassigned'
+      await supabase.from('opportunity_comments').insert({
+        opportunity_id: id,
+        workspace_id: current.workspace_id,
+        author: current.full_name || current.email,
+        body: `Reassigned from ${prevName} to ${nextName}`,
+      })
+    }
+
+    revalidatePath(`/opportunities/${id}`)
+    revalidatePath('/dashboard')
   }
 
   const currentIdx = PATH.indexOf(opp.stage as (typeof PATH)[number])
@@ -186,23 +243,51 @@ export default async function OpportunityDetailPage({
           )
         })}
         <span className="mx-1 text-slate-700">·</span>
-        {(['Won', 'Lost'] as const).map((stage) => (
-          <form key={stage} action={setStage} className="contents">
-            <input type="hidden" name="stage" value={stage} />
+        <form action={setStage} className="contents">
+          <input type="hidden" name="stage" value="Won" />
+          <button
+            type="submit"
+            className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+              opp.stage === 'Won'
+                ? 'bg-emerald-600 text-white'
+                : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
+            }`}
+          >
+            ✓ Won
+          </button>
+        </form>
+        {opp.stage === 'Lost' ? (
+          <span className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white">
+            ✕ Lost{opp.lost_reason ? ` · ${opp.lost_reason}` : ''}
+          </span>
+        ) : (
+          <form action={setStage} className="flex items-center gap-1.5">
+            <input type="hidden" name="stage" value="Lost" />
+            <select
+              name="lost_reason"
+              required
+              defaultValue=""
+              className="rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs text-slate-300 focus:outline-none focus:ring-2 focus:ring-red-500/60"
+            >
+              <option value="" disabled>
+                Lost reason…
+              </option>
+              <option value="Price too high">Price too high</option>
+              <option value="Competitor">Competitor</option>
+              <option value="No budget">No budget</option>
+              <option value="No response">No response</option>
+              <option value="Timing">Timing</option>
+              <option value="Not qualified">Not qualified</option>
+              <option value="Other">Other</option>
+            </select>
             <button
               type="submit"
-              className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                opp.stage === stage
-                  ? stage === 'Won'
-                    ? 'bg-emerald-600 text-white'
-                    : 'bg-red-600 text-white'
-                  : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
-              }`}
+              className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-400 transition-colors hover:bg-red-900/40 hover:text-red-300"
             >
-              {stage === 'Won' ? '✓ Won' : '✕ Lost'}
+              ✕ Lost
             </button>
           </form>
-        ))}
+        )}
       </div>
 
       {!migrated && (
@@ -234,6 +319,39 @@ export default async function OpportunityDetailPage({
                 </p>
               </div>
             ))}
+
+            {/* Assignment (owner/manager only) */}
+            {elevated && (
+              <form
+                action={assign}
+                className="bg-slate-800/40 border border-slate-700/60 rounded-xl p-3.5"
+              >
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <Users size={12} className="text-slate-600" />
+                  <span className="text-xs text-slate-500">Assigned to</span>
+                </div>
+                <div className="flex gap-1.5">
+                  <select
+                    name="assigned_to"
+                    defaultValue={opp.assigned_to ?? ''}
+                    className="min-w-0 flex-1 bg-slate-800 border border-slate-700 rounded-md px-1.5 py-1 text-xs text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/70"
+                  >
+                    <option value="">— None —</option>
+                    {members.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.full_name || m.email}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="submit"
+                    className="px-2 py-1 rounded-md text-xs font-medium bg-emerald-600 hover:bg-emerald-500 text-white transition-colors flex-none"
+                  >
+                    Save
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
 
           {/* Customer */}

@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase'
-import { requireMember } from '@/lib/auth'
+import { requireMember, hasElevatedAccess } from '@/lib/auth'
 import type { Organization } from '@/types'
 import RecordsTable, { type TableRow } from '@/components/RecordsTable'
 
@@ -7,12 +7,19 @@ export const dynamic = 'force-dynamic'
 
 export default async function OrganizationsPage() {
   const me = await requireMember()
-  const { data, error } = await supabase
+  const elevated = hasElevatedAccess(me)
+  let query = supabase
     .from('organizations')
-    .select('*')
+    .select('*, assignee:members(id, full_name, email)')
     .eq('workspace_id', me.workspace_id)
     .eq('archived', false)
     .order('name')
+
+  if (!elevated) {
+    query = query.eq('assigned_to', me.id)
+  }
+
+  const { data, error } = await query
 
   if (error) {
     return (
@@ -48,6 +55,9 @@ export default async function OrganizationsPage() {
           href: websiteHref,
           external: true,
         },
+        ...(elevated
+          ? [{ value: org.assignee?.full_name || org.assignee?.email || 'Unassigned' }]
+          : []),
       ],
       searchText: [
         org.name,
@@ -57,6 +67,7 @@ export default async function OrganizationsPage() {
         org.phone,
         org.website,
         org.identification_code,
+        org.assignee?.full_name,
       ]
         .filter(Boolean)
         .join(' ')
@@ -67,7 +78,7 @@ export default async function OrganizationsPage() {
   return (
     <RecordsTable
       rows={rows}
-      columns={['Phone', 'Email', 'Website']}
+      columns={elevated ? ['Phone', 'Email', 'Website', 'Assigned to'] : ['Phone', 'Email', 'Website']}
       tabs={[
         { label: 'Organizations', href: '/organizations', active: true },
         { label: 'Contacts', href: '/contacts' },

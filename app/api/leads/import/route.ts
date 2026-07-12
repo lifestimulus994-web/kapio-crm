@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { revalidatePath } from 'next/cache'
-import { getCurrentMember } from '@/lib/auth'
+import { getCurrentMember, hasElevatedAccess } from '@/lib/auth'
 import { supabase as admin } from '@/lib/supabase'
 
 type ImportRow = {
@@ -32,8 +32,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'ერთდროულად მაქსიმუმ 500 ლიდი' }, { status: 400 })
   }
 
-  // Only the owner may assign a pasted batch straight to a teammate.
-  const assignedTo = me.role === 'owner' ? body.assigned_to || null : null
+  // Only owner/manager may assign a pasted batch straight to a teammate.
+  const assignedTo = hasElevatedAccess(me) ? body.assigned_to || null : null
 
   const { data, error } = await admin
     .from('leads')

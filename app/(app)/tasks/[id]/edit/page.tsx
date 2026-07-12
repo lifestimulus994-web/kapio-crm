@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
-import { requireMember } from '@/lib/auth'
+import { requireMember, hasElevatedAccess } from '@/lib/auth'
 import type { Organization, Contact, Opportunity, Task } from '@/types'
 import { TASK_PRIORITIES } from '@/types'
 import { ChevronLeft, Trash2 } from 'lucide-react'
@@ -21,9 +21,13 @@ export default async function EditTaskPage({
 }) {
   const { id } = await params
   const me = await requireMember()
+  const elevated = hasElevatedAccess(me)
 
-  const [taskRes, orgsRes, contactsRes, oppsRes] = await Promise.all([
-    supabase.from('tasks').select('*').eq('id', id).eq('workspace_id', me.workspace_id).single(),
+  let taskQuery = supabase.from('tasks').select('*').eq('id', id).eq('workspace_id', me.workspace_id)
+  if (!elevated) taskQuery = taskQuery.eq('assigned_to', me.id)
+
+  const [taskRes, orgsRes, contactsRes, oppsRes, membersRes] = await Promise.all([
+    taskQuery.single(),
     supabase.from('organizations').select('id, name').eq('workspace_id', me.workspace_id).order('name'),
     supabase
       .from('contacts')
@@ -35,6 +39,13 @@ export default async function EditTaskPage({
       .select('id, title')
       .eq('workspace_id', me.workspace_id)
       .order('created_at', { ascending: false }),
+    elevated
+      ? supabase
+          .from('members')
+          .select('id, full_name, email')
+          .eq('workspace_id', me.workspace_id)
+          .order('full_name')
+      : Promise.resolve({ data: [] }),
   ])
 
   if (taskRes.error || !taskRes.data) {
@@ -48,24 +59,30 @@ export default async function EditTaskPage({
     'id' | 'first_name' | 'last_name'
   >[]
   const opps = (oppsRes.data ?? []) as Pick<Opportunity, 'id' | 'title'>[]
+  const members = membersRes.data ?? []
 
   async function update(formData: FormData) {
     'use server'
     const owner = await requireMember()
+    const elevatedOwner = hasElevatedAccess(owner)
+    const patch: Record<string, unknown> = {
+      title: formData.get('title') as string,
+      description: (formData.get('description') as string) || null,
+      start_date: (formData.get('start_date') as string) || null,
+      due_date: (formData.get('due_date') as string) || null,
+      priority: (formData.get('priority') as string) || 'Medium',
+      owner: (formData.get('owner') as string) || null,
+      status: (formData.get('status') as string) || 'todo',
+      opportunity_id: (formData.get('opportunity_id') as string) || null,
+      organization_id: (formData.get('organization_id') as string) || null,
+      contact_id: (formData.get('contact_id') as string) || null,
+    }
+    if (elevatedOwner) {
+      patch.assigned_to = (formData.get('assigned_to') as string) || null
+    }
     const { error } = await supabase
       .from('tasks')
-      .update({
-        title: formData.get('title') as string,
-        description: (formData.get('description') as string) || null,
-        start_date: (formData.get('start_date') as string) || null,
-        due_date: (formData.get('due_date') as string) || null,
-        priority: (formData.get('priority') as string) || 'Medium',
-        owner: (formData.get('owner') as string) || null,
-        status: (formData.get('status') as string) || 'todo',
-        opportunity_id: (formData.get('opportunity_id') as string) || null,
-        organization_id: (formData.get('organization_id') as string) || null,
-        contact_id: (formData.get('contact_id') as string) || null,
-      })
+      .update(patch)
       .eq('id', id)
       .eq('workspace_id', owner.workspace_id)
     if (error) throw new Error(error.message)
@@ -187,6 +204,19 @@ export default async function EditTaskPage({
                 placeholder="Responsible person"
               />
             </div>
+            {elevated && (
+              <div>
+                <label className={label}>Assigned to</label>
+                <select name="assigned_to" defaultValue={task.assigned_to ?? ''} className={input}>
+                  <option value="">— Unassigned —</option>
+                  {members.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.full_name || m.email}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
         </section>
 

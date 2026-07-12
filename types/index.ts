@@ -1,3 +1,5 @@
+export type Assignee = { id: string; full_name: string | null; email: string }
+
 export type Organization = {
   id: string
   name: string
@@ -10,6 +12,8 @@ export type Organization = {
   industry: string | null
   notes: string | null
   created_at: string
+  assigned_to?: string | null
+  assignee?: Assignee | null
 }
 
 export type Contact = {
@@ -23,6 +27,8 @@ export type Contact = {
   notes: string | null
   created_at: string
   organization?: Pick<Organization, 'id' | 'name'>
+  assigned_to?: string | null
+  assignee?: Assignee | null
 }
 
 export const STAGES = [
@@ -53,9 +59,22 @@ export type Opportunity = {
   source?: string | null
   start_date?: string | null
   close_date?: string | null
+  lost_reason?: string | null
   organization?: Pick<Organization, 'id' | 'name' | 'email' | 'phone'>
   contact?: Pick<Contact, 'id' | 'first_name' | 'last_name' | 'phone' | 'email'>
+  assigned_to?: string | null
+  assignee?: Assignee | null
 }
+
+export const LOST_REASONS = [
+  'Price too high',
+  'Competitor',
+  'No budget',
+  'No response',
+  'Timing',
+  'Not qualified',
+  'Other',
+] as const
 
 export type TaskStatus = 'todo' | 'in_progress' | 'done'
 
@@ -82,6 +101,8 @@ export type Task = {
   organization?: Pick<Organization, 'id' | 'name'>
   contact?: Pick<Contact, 'id' | 'first_name' | 'last_name'>
   opportunity?: Pick<Opportunity, 'id' | 'title'>
+  assigned_to?: string | null
+  assignee?: Assignee | null
 }
 
 export type TaskComment = {

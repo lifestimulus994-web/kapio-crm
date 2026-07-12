@@ -7,8 +7,15 @@ export type Member = {
   workspace_id: string
   email: string
   full_name: string | null
-  role: 'owner' | 'member'
+  role: 'owner' | 'manager' | 'member'
   created_at: string
+}
+
+// Owner and manager see/manage every record in the workspace; a plain
+// 'member' only sees records assigned to them (enforced by callers adding
+// .eq('assigned_to', member.id) when this is false).
+export function hasElevatedAccess(member: Pick<Member, 'role'>): boolean {
+  return member.role === 'owner' || member.role === 'manager'
 }
 
 // No redirect — safe to call from API routes.

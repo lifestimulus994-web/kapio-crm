@@ -1,9 +1,9 @@
 import Link from 'next/link'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
-import { requireMember } from '@/lib/auth'
+import { requireMember, hasElevatedAccess } from '@/lib/auth'
 import type { Contact, Opportunity, Organization, Task, ContactComment } from '@/types'
-import { ChevronLeft, Mail, Phone, Briefcase, Building2, Pencil } from 'lucide-react'
+import { ChevronLeft, Mail, Phone, Briefcase, Building2, Pencil, Users } from 'lucide-react'
 import { formatCurrency, formatDate, fullName } from '@/lib/utils'
 import CommentThread from '@/components/CommentThread'
 
@@ -26,14 +26,17 @@ export default async function ContactDetailPage({
 }) {
   const { id } = await params
   const me = await requireMember()
+  const elevated = hasElevatedAccess(me)
 
-  const [contactRes, oppsRes, tasksRes, orgsRes, commentsRes] = await Promise.all([
-    supabase
-      .from('contacts')
-      .select('*, organization:organizations(id, name)')
-      .eq('id', id)
-      .eq('workspace_id', me.workspace_id)
-      .single(),
+  let contactQuery = supabase
+    .from('contacts')
+    .select('*, organization:organizations(id, name), assignee:members(id, full_name, email)')
+    .eq('id', id)
+    .eq('workspace_id', me.workspace_id)
+  if (!elevated) contactQuery = contactQuery.eq('assigned_to', me.id)
+
+  const [contactRes, oppsRes, tasksRes, orgsRes, commentsRes, membersRes] = await Promise.all([
+    contactQuery.single(),
     supabase
       .from('opportunities')
       .select('*')
@@ -53,6 +56,13 @@ export default async function ContactDetailPage({
       .eq('contact_id', id)
       .eq('workspace_id', me.workspace_id)
       .order('created_at', { ascending: true }),
+    elevated
+      ? supabase
+          .from('members')
+          .select('id, full_name, email')
+          .eq('workspace_id', me.workspace_id)
+          .order('full_name')
+      : Promise.resolve({ data: null, error: null }),
   ])
 
   if (contactRes.error || !contactRes.data) {
@@ -66,6 +76,7 @@ export default async function ContactDetailPage({
   // If the comments table isn't migrated yet, degrade gracefully.
   const comments = (commentsRes.error ? [] : commentsRes.data ?? []) as ContactComment[]
   const commentsReady = !commentsRes.error
+  const members = (membersRes.data ?? []) as { id: string; full_name: string | null; email: string }[]
 
   async function updateOrganization(formData: FormData) {
     'use server'
@@ -93,6 +104,45 @@ export default async function ContactDetailPage({
       .insert({ contact_id: id, workspace_id: owner.workspace_id, author, body })
     if (error) throw new Error(error.message)
     revalidatePath(`/contacts/${id}`)
+  }
+
+  async function assign(formData: FormData) {
+    'use server'
+    const current = await requireMember()
+    if (!hasElevatedAccess(current)) return
+    const newAssignee = (formData.get('assigned_to') as string) || null
+
+    const { data: before } = await supabase
+      .from('contacts')
+      .select('assigned_to, assignee:members(full_name, email)')
+      .eq('id', id)
+      .eq('workspace_id', current.workspace_id)
+      .single()
+
+    const { error } = await supabase
+      .from('contacts')
+      .update({ assigned_to: newAssignee })
+      .eq('id', id)
+      .eq('workspace_id', current.workspace_id)
+    if (error) throw new Error(error.message)
+
+    if (before && before.assigned_to !== newAssignee) {
+      const prev = before.assignee as unknown as { full_name: string | null; email: string } | null
+      const { data: next } = newAssignee
+        ? await supabase.from('members').select('full_name, email').eq('id', newAssignee).single()
+        : { data: null }
+      const prevName = prev ? prev.full_name || prev.email : 'Unassigned'
+      const nextName = next ? next.full_name || next.email : 'Unassigned'
+      await supabase.from('contact_comments').insert({
+        contact_id: id,
+        workspace_id: current.workspace_id,
+        author: current.full_name || current.email,
+        body: `Reassigned from ${prevName} to ${nextName}`,
+      })
+    }
+
+    revalidatePath(`/contacts/${id}`)
+    revalidatePath('/contacts')
   }
 
   const info = [
@@ -178,6 +228,37 @@ export default async function ContactDetailPage({
             Save
           </button>
         </form>
+
+        {/* Assignment (owner/manager only) */}
+        {elevated && (
+          <form
+            action={assign}
+            className="bg-slate-800/40 border border-slate-700/60 rounded-xl p-3.5"
+          >
+            <div className="flex items-center gap-1.5 mb-1.5">
+              <Users size={12} className="text-slate-600" />
+              <span className="text-xs text-slate-500">Assigned to</span>
+            </div>
+            <select
+              name="assigned_to"
+              defaultValue={contact.assigned_to ?? ''}
+              className="w-full bg-slate-800 border border-slate-700 rounded-md px-2 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/70"
+            >
+              <option value="">— Unassigned —</option>
+              {members.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.full_name || m.email}
+                </option>
+              ))}
+            </select>
+            <button
+              type="submit"
+              className="mt-2 w-full py-1.5 rounded-md text-xs font-medium bg-emerald-600 hover:bg-emerald-500 text-white transition-colors"
+            >
+              Save
+            </button>
+          </form>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">

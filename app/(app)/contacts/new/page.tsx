@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
-import { requireMember } from '@/lib/auth'
+import { requireMember, hasElevatedAccess } from '@/lib/auth'
 import type { Organization } from '@/types'
 import { ChevronLeft } from 'lucide-react'
 
@@ -19,18 +19,29 @@ export default async function NewContactPage({
 }) {
   const { org: preselectedOrg } = await searchParams
   const me = await requireMember()
+  const elevated = hasElevatedAccess(me)
 
-  const { data: orgsData } = await supabase
-    .from('organizations')
-    .select('id, name')
-    .eq('workspace_id', me.workspace_id)
-    .order('name')
+  const [{ data: orgsData }, membersData] = await Promise.all([
+    supabase.from('organizations').select('id, name').eq('workspace_id', me.workspace_id).order('name'),
+    elevated
+      ? supabase
+          .from('members')
+          .select('id, full_name, email')
+          .eq('workspace_id', me.workspace_id)
+          .order('full_name')
+      : Promise.resolve({ data: [] }),
+  ])
 
   const orgs = (orgsData ?? []) as Pick<Organization, 'id' | 'name'>[]
+  const members = membersData.data ?? []
 
   async function create(formData: FormData) {
     'use server'
     const owner = await requireMember()
+    const elevated = hasElevatedAccess(owner)
+    const assignedTo = elevated
+      ? (formData.get('assigned_to') as string) || null
+      : owner.id
     const { error } = await supabase.from('contacts').insert({
       workspace_id: owner.workspace_id,
       first_name: formData.get('first_name') as string,
@@ -40,6 +51,7 @@ export default async function NewContactPage({
       email: (formData.get('email') as string) || null,
       phone: (formData.get('phone') as string) || null,
       notes: (formData.get('notes') as string) || null,
+      assigned_to: assignedTo,
     })
     if (error) throw new Error(error.message)
     revalidatePath('/contacts')
@@ -117,6 +129,19 @@ export default async function NewContactPage({
                 ))}
               </select>
             </div>
+            {elevated && (
+              <div>
+                <label className={label}>Assigned to</label>
+                <select name="assigned_to" defaultValue={me.id} className={input}>
+                  <option value="">— Unassigned —</option>
+                  {members.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.full_name || m.email}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
         </section>
 

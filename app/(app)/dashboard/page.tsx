@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
-import { requireMember } from '@/lib/auth'
+import { requireMember, hasElevatedAccess } from '@/lib/auth'
 import { STAGES, type Opportunity, type Stage } from '@/types'
 import { formatCurrency } from '@/lib/utils'
 
@@ -18,7 +18,7 @@ const stageDot: Record<string, string> = {
 
 export default async function PipelinePage() {
   const me = await requireMember()
-  const { data, error } = await supabase
+  let query = supabase
     .from('opportunities')
     .select(
       '*, organization:organizations(id, name), contact:contacts(id, first_name, last_name)'
@@ -26,6 +26,12 @@ export default async function PipelinePage() {
     .eq('workspace_id', me.workspace_id)
     .eq('archived', false)
     .order('created_at', { ascending: false })
+
+  if (!hasElevatedAccess(me)) {
+    query = query.eq('assigned_to', me.id)
+  }
+
+  const { data, error } = await query
 
   if (error) {
     return (

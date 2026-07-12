@@ -16,6 +16,7 @@ export default function TeamManager({
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [fullName, setFullName] = useState('')
+  const [role, setRole] = useState<'member' | 'manager'>('member')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [removingId, setRemovingId] = useState<string | null>(null)
@@ -28,7 +29,7 @@ export default function TeamManager({
     const res = await fetch('/api/team', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, full_name: fullName }),
+      body: JSON.stringify({ email, password, full_name: fullName, role }),
     })
     const data = await res.json()
 
@@ -41,6 +42,7 @@ export default function TeamManager({
     setEmail('')
     setPassword('')
     setFullName('')
+    setRole('member')
     router.refresh()
   }
 
@@ -76,10 +78,12 @@ export default function TeamManager({
                 className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
                   m.role === 'owner'
                     ? 'bg-emerald-900/40 text-emerald-400'
-                    : 'bg-slate-800 text-slate-400'
+                    : m.role === 'manager'
+                      ? 'bg-blue-900/40 text-blue-400'
+                      : 'bg-slate-800 text-slate-400'
                 }`}
               >
-                {m.role === 'owner' ? 'Owner' : 'Member'}
+                {m.role === 'owner' ? 'Owner' : m.role === 'manager' ? 'Manager' : 'Member'}
               </span>
               {m.role !== 'owner' && (
                 <button
@@ -134,6 +138,17 @@ export default function TeamManager({
             placeholder="მინიმუმ 6 სიმბოლო"
             className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-500"
           />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-slate-400">როლი</label>
+          <select
+            value={role}
+            onChange={(e) => setRole(e.target.value as 'member' | 'manager')}
+            className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-500"
+          >
+            <option value="member">Member — მხოლოდ საკუთარი ჩანაწერები</option>
+            <option value="manager">Manager — ხედავს/მართავს მთელ გუნდს</option>
+          </select>
         </div>
 
         {error && <p className="text-sm text-red-400">{error}</p>}
