@@ -45,6 +45,7 @@ export default async function OrganizationsPage() {
       title: org.name,
       subtitle: org.industry || org.legal_name || '',
       cells: [
+        { value: org.identification_code },
         { value: org.phone, href: org.phone ? `tel:${org.phone}` : undefined },
         {
           value: org.email,
@@ -78,7 +79,11 @@ export default async function OrganizationsPage() {
   return (
     <RecordsTable
       rows={rows}
-      columns={elevated ? ['Phone', 'Email', 'Website', 'Assigned to'] : ['Phone', 'Email', 'Website']}
+      columns={
+        elevated
+          ? ['ID Code', 'Phone', 'Email', 'Website', 'Assigned to']
+          : ['ID Code', 'Phone', 'Email', 'Website']
+      }
       tabs={[
         { label: 'Organizations', href: '/organizations', active: true },
         { label: 'Contacts', href: '/contacts' },
