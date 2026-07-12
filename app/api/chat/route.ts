@@ -139,8 +139,9 @@ Guidelines:
   update_organization with organization_name = the current (wrong) name and
   new_name = the correct one. To also refill its details, FIRST call
   find_company_contacts with the corrected name, then update_organization with
-  new_name + the found email/phone/website/address. Do NOT create a duplicate
-  company.
+  new_name + the found legal_name/identification_code (trusted, from the
+  registry) and email/phone/website/address (unverified, from the web). Do NOT
+  create a duplicate company.
 - CALENDAR SCHEDULING (IMPORTANT — read carefully): a task shows on the weekly
   calendar ONLY if it has a time. Whenever the user mentions ANY day or clock time,
   you MUST pass start_at on create_task / update_task. NEVER create a task that has
@@ -203,17 +204,18 @@ Guidelines:
     * use "official_name" as the company "name" (it fixes a misheard/misspelled
       name and keeps multi-word names intact — e.g. "ტერავი + პლიუსი" → the real
       "Teravita Plus");
-    * fill email, phone, website, and address (location) from the results;
-    * fill "identification_code" from the results if present — it comes from
-      Georgia's official business registry (companyinfo.ge), so it does NOT
-      need a verify warning, unlike the web-sourced fields below.
+    * REGISTRY data (Georgia's official business registry, companyinfo.ge) —
+      100% trusted, no verify warning needed: fill "legal_name" from
+      legal_name, and "identification_code" from identification_code;
+    * WEB data — best-effort, needs the verify warning below: fill email,
+      phone, website, and address (location) from the results.
   In the organization's "notes", append: "⚠️ Email/phone/website/address
-  auto-found on the web on ${today} — VERIFY." (omit this note entirely if only
-  identification_code was found and nothing else). In your reply, list what was
-  auto-filled (including the location and identification code), say the
-  contact details are unverified, and show source link(s) if any. If nothing
-  reliable was found, create the company with the details the user gave and
-  say the lookup found nothing.
+  auto-found on the web on ${today} — VERIFY." (omit this note entirely if
+  only registry data — legal_name/identification_code — was found and no web
+  data). In your reply, clearly separate what came from the official registry
+  (trusted) vs. the web (unverified), and show source link(s) for the web
+  data if any. If nothing reliable was found, create the company with the
+  details the user gave and say the lookup found nothing.
 - Never search for or store passwords or private credentials — those are not
   publicly available and must never be guessed.
 - After a tool runs, briefly confirm what changed. Never claim you changed

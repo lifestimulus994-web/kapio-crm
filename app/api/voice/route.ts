@@ -111,11 +111,11 @@ Do the following, in order:
    - create_organization for a new company. FIRST call find_company_contacts with
      the heard name (add a hint like "Georgia" / the city if known). Use the
      returned "official_name" as the company name (this corrects the misheard
-     spelling), fill email, phone, website, and address from the result, and fill
-     "identification_code" if the registry (companyinfo.ge) returned one — that
-     part is authoritative, no verify warning needed for it. In the org "notes"
+     spelling). REGISTRY data (companyinfo.ge) — trusted, no verify warning:
+     fill "legal_name" and "identification_code" from the results. WEB data —
+     unverified: fill email, phone, website, and address. In the org "notes"
      add: "⚠️ Email/phone/website/address auto-found on the web — VERIFY." (skip
-     this note if only identification_code was found). If the lookup returns
+     this note if only registry data was found). If the lookup returns
      nothing, create it with the name and details from the memo.
    - create_contact for a new person (link to the company by name).
    - create_opportunity when the memo describes a potential deal/sale (set value_gel in

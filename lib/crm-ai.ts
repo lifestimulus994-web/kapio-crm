@@ -87,10 +87,12 @@ export async function buildContext(scope: AiScope) {
 // for secrets (passwords, etc.) — only publicly listed details.
 type CompanyInfo = {
   official_name: string
+  legal_name: string
   email: string
   phone: string
   website: string
   address: string
+  registry_address: string
   identification_code: string
   sources: string[]
 }
@@ -102,10 +104,12 @@ export async function findCompanyContacts(
   if (!name?.trim()) {
     return {
       official_name: '',
+      legal_name: '',
       email: '',
       phone: '',
       website: '',
       address: '',
+      registry_address: '',
       identification_code: '',
       sources: [],
     }
@@ -115,11 +119,12 @@ export async function findCompanyContacts(
   const place = await searchCompanyOnPlaces(name, hint)
 
   // 2. Gemini + Google Search — email and any gaps Places left, plus
-  //    companyinfo.ge — Georgia's business registry mirror, the only reliable
-  //    source for the identification/registration code (საიდენტიფიკაციო
-  //    კოდი), which neither Places nor a general web search returns. Both
-  //    seeded with the corrected Places name (if any) so they look up the
-  //    right company.
+  //    companyinfo.ge — Georgia's business registry mirror. The registry is
+  //    the ONLY source here backed by an official government record: its
+  //    legal_name, identification_code, and registry_address are returned
+  //    as-is, no verification needed, unlike everything else below which is
+  //    web-sourced best-effort. Both seeded with the corrected Places name
+  //    (if any) so they look up the right company.
   const [gem, registry] = await Promise.all([
     groundCompanyWithGemini(place.official_name || name, hint),
     searchIdentificationCode(place.official_name || name),
@@ -131,10 +136,12 @@ export async function findCompanyContacts(
 
   return {
     official_name: place.official_name || gem.official_name || '',
+    legal_name: registry.legal_name || '',
     email: gem.email || '', // Places never returns email
     phone: place.phone || gem.phone || '',
     website: place.website || gem.website || '',
     address: place.address || gem.address || registry.address || '',
+    registry_address: registry.address || '',
     identification_code: registry.identification_code || '',
     sources,
   }
@@ -147,10 +154,12 @@ async function groundCompanyWithGemini(
 ): Promise<CompanyInfo> {
   const empty: CompanyInfo = {
     official_name: '',
+    legal_name: '',
     email: '',
     phone: '',
     website: '',
     address: '',
+    registry_address: '',
     identification_code: '',
     sources: [],
   }
@@ -235,10 +244,12 @@ Do NOT guess or fabricate. Never return passwords or private credentials.`
 
     return {
       official_name: (parsed.official_name ?? '').trim(),
+      legal_name: '',
       email: (parsed.email ?? '').trim(),
       phone: (parsed.phone ?? '').trim(),
       website: (parsed.website ?? '').trim(),
       address: (parsed.address ?? '').trim(),
+      registry_address: '',
       identification_code: '',
       sources,
     }
@@ -439,7 +450,7 @@ export const tools: FunctionDeclaration[] = [
   {
     name: 'find_company_contacts',
     description:
-      "Search the public web (Google) AND Georgia's official business registry (companyinfo.ge) for a company's details — corrected official name, email, phone, website, address/location, and identification_code (საიდენტიფიკაციო კოდი — the Georgian tax/registration ID). Also fixes a misheard or misspelled name (useful for voice input). ALWAYS call this BEFORE create_organization when adding a Georgian company, so the record uses the correct name, identification code, and is pre-filled. identification_code comes straight from the official registry and can be trusted; the rest is web-sourced and should be flagged as unverified.",
+      "Search the public web (Google) AND Georgia's official business registry (companyinfo.ge) for a company's details. Returns two kinds of data: from the REGISTRY (100% trusted, no verification needed) — legal_name (the official registered name, e.g. \"შპს X\"), identification_code (საიდენტიფიკაციო კოდი), registry_address; from the WEB (best-effort, must be flagged unverified) — official_name (corrected display name, also fixes a misheard/misspelled name from voice input), email, phone, website, address. ALWAYS call this BEFORE create_organization when adding a Georgian company, so the record is fully pre-filled.",
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -984,13 +995,18 @@ async function runToolInner(
       return { success: false, error: 'Company name is required.' }
     const found = await findCompanyContacts(company, str(args.hint) ?? undefined)
     const anything =
-      found.email || found.phone || found.website || found.address || found.identification_code
+      found.email ||
+      found.phone ||
+      found.website ||
+      found.address ||
+      found.identification_code ||
+      found.legal_name
     return {
       success: true,
       found,
       verified: false,
       note: anything
-        ? 'Public data — use official_name for the company name; fill email/phone/website/address/identification_code. identification_code comes from the official Georgian business registry (companyinfo.ge) and can be trusted as-is; the rest is web-sourced and must be verified.'
+        ? "Two kinds of data here. From Georgia's official business registry (companyinfo.ge) — TRUSTED, no verification needed: legal_name, identification_code, registry_address. From general web search — best-effort, must be flagged unverified: official_name (display name), email, phone, website, address. Use official_name for the org's \"name\" field and legal_name for its \"legal_name\" field."
         : 'Nothing reliable found for this company.',
     }
   }
