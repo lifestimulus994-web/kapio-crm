@@ -35,6 +35,7 @@ export default function SignupPage() {
           business_name: businessName,
           full_name: fullName,
         },
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
       },
     })
     setLoading(false)
