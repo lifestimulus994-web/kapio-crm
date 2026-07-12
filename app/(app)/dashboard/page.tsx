@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
+import { requireMember } from '@/lib/auth'
 import { STAGES, type Opportunity, type Stage } from '@/types'
 import { formatCurrency } from '@/lib/utils'
 
@@ -16,11 +17,13 @@ const stageDot: Record<string, string> = {
 }
 
 export default async function PipelinePage() {
+  const me = await requireMember()
   const { data, error } = await supabase
     .from('opportunities')
     .select(
       '*, organization:organizations(id, name), contact:contacts(id, first_name, last_name)'
     )
+    .eq('workspace_id', me.workspace_id)
     .eq('archived', false)
     .order('created_at', { ascending: false })
 

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { GoogleGenAI, FunctionCallingConfigMode } from '@google/genai'
 import { supabase } from '@/lib/supabase'
+import { getCurrentMember } from '@/lib/auth'
 import { buildContext, loadKnowledge, tools, runTool } from '@/lib/crm-ai'
 
 export const dynamic = 'force-dynamic'
@@ -12,6 +13,9 @@ export const dynamic = 'force-dynamic'
 //  - mode 'ai':     mark done + let the agent log a tidy opportunity comment and
 //                   create a follow-up task if the outcome implies one.
 export async function POST(req: Request) {
+  const me = await getCurrentMember()
+  if (!me) return NextResponse.json({ error: 'შესვლა საჭიროა' }, { status: 401 })
+
   let body: { taskId?: string; outcome?: string; mode?: string }
   try {
     body = await req.json()
@@ -31,6 +35,7 @@ export async function POST(req: Request) {
     .from('tasks')
     .select('id, title, owner, opportunity:opportunities(id, title)')
     .eq('id', taskId)
+    .eq('workspace_id', me.workspace_id)
     .single()
   if (taskErr || !task) {
     return NextResponse.json({ error: 'Task not found.' }, { status: 404 })
@@ -41,6 +46,7 @@ export async function POST(req: Request) {
     .from('tasks')
     .update({ status: 'done' })
     .eq('id', taskId)
+    .eq('workspace_id', me.workspace_id)
   if (updErr) {
     return NextResponse.json({ error: updErr.message }, { status: 500 })
   }
@@ -60,6 +66,7 @@ export async function POST(req: Request) {
   if (mode === 'manual') {
     const { error } = await supabase.from('opportunity_comments').insert({
       opportunity_id: opp.id,
+      workspace_id: me.workspace_id,
       author: task.owner || 'You',
       body: outcome,
     })
@@ -81,7 +88,7 @@ export async function POST(req: Request) {
 
   try {
     const [context, knowledge] = await Promise.all([
-      buildContext(),
+      buildContext(me.workspace_id),
       loadKnowledge(),
     ])
     const today = new Date().toISOString().slice(0, 10)
@@ -151,7 +158,7 @@ ${context}`
       for (const call of calls) {
         const name = call.name ?? ''
         const args = (call.args ?? {}) as Record<string, unknown>
-        const result = await runTool(name, args)
+        const result = await runTool(name, args, me.workspace_id)
         actions.push({ name, result })
         responseParts.push({ functionResponse: { name, response: result } })
       }

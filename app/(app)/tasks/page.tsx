@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
+import { requireMember } from '@/lib/auth'
 import type { Task, TaskStatus } from '@/types'
 import { Plus, Calendar, User, Briefcase, CalendarDays, ListTodo } from 'lucide-react'
 import { formatDate, isOverdue } from '@/lib/utils'
@@ -12,11 +13,13 @@ export const dynamic = 'force-dynamic'
 const groups: TaskStatus[] = ['todo', 'in_progress', 'done']
 
 export default async function TasksPage() {
+  const me = await requireMember()
   const { data, error } = await supabase
     .from('tasks')
     .select(
       '*, organization:organizations(id, name), contact:contacts(id, first_name, last_name), opportunity:opportunities(id, title)'
     )
+    .eq('workspace_id', me.workspace_id)
     .eq('archived', false)
     .order('due_date', { ascending: true, nullsFirst: false })
 
@@ -32,12 +35,14 @@ export default async function TasksPage() {
 
   async function advanceStatus(formData: FormData) {
     'use server'
+    const owner = await requireMember()
     const id = formData.get('id') as string
     const current = formData.get('status') as TaskStatus
     const { error } = await supabase
       .from('tasks')
       .update({ status: nextStatus[current] ?? 'todo' })
       .eq('id', id)
+      .eq('workspace_id', owner.workspace_id)
     if (error) throw new Error(error.message)
     revalidatePath('/tasks')
   }

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
+import { getCurrentMember } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
 
@@ -14,6 +15,9 @@ const STATUSES = ['todo', 'in_progress', 'done']
 // kept in sync by the client so the task stays dated. An all-day task sends
 // start_date/due_date with start_at/end_at null. (No all_day column is used.)
 export async function POST(req: Request) {
+  const me = await getCurrentMember()
+  if (!me) return NextResponse.json({ error: 'შესვლა საჭიროა' }, { status: 401 })
+
   let body: Record<string, unknown>
   try {
     body = await req.json()
@@ -74,6 +78,7 @@ export async function POST(req: Request) {
       .from('tasks')
       .update(patch)
       .eq('id', id)
+      .eq('workspace_id', me.workspace_id)
       .select('id, title, start_at, end_at, start_date, due_date, status')
       .single()
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
@@ -86,6 +91,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Title is required.' }, { status: 400 })
   }
   const insert: Record<string, unknown> = {
+    workspace_id: me.workspace_id,
     title,
     description: str(body.description),
     priority: PRIORITIES.includes(String(body.priority))

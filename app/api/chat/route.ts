@@ -8,6 +8,7 @@ import {
   DESTRUCTIVE_TOOLS,
 } from '@/lib/crm-ai'
 import { parseGeorgianSchedule } from '@/lib/gschedule'
+import { getCurrentMember } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
 
@@ -31,6 +32,9 @@ function describeDestructive(name: string, args: Record<string, unknown>): strin
 
 // ---------- route ----------
 export async function POST(req: Request) {
+  const me = await getCurrentMember()
+  if (!me) return NextResponse.json({ error: 'შესვლა საჭიროა' }, { status: 401 })
+
   if (!process.env.GEMINI_API_KEY) {
     return NextResponse.json(
       { error: 'GEMINI_API_KEY is not configured on the server.' },
@@ -55,7 +59,7 @@ export async function POST(req: Request) {
     if (!DESTRUCTIVE_TOOLS.has(name)) {
       return NextResponse.json({ error: 'Not a confirmable action.' }, { status: 400 })
     }
-    const result = await runTool(name, args ?? {})
+    const result = await runTool(name, args ?? {}, me.workspace_id)
     const reply = result.success
       ? `Done.`
       : `Couldn't do that: ${result.error ?? 'unknown error'}`
@@ -88,7 +92,7 @@ export async function POST(req: Request) {
     // about the actual records.
     const [knowledge, crmData] = await Promise.all([
       loadKnowledge(),
-      buildContext(),
+      buildContext(me.workspace_id),
     ])
 
     const systemInstruction = `You are the AI assistant for Kapio CRM, a sales CRM used by a company in Georgia.
@@ -289,7 +293,7 @@ Guidelines:
           continue
         }
 
-        const result = await runTool(name, args)
+        const result = await runTool(name, args, me.workspace_id)
         executed.push({ name, result })
         responseParts.push({ functionResponse: { name, response: result } })
       }

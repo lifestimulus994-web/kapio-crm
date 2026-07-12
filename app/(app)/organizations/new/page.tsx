@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
+import { requireMember } from '@/lib/auth'
 import { ChevronLeft } from 'lucide-react'
 
 const input =
@@ -11,7 +12,9 @@ const label = 'block text-xs font-medium text-slate-400 mb-1.5'
 export default function NewOrganizationPage() {
   async function create(formData: FormData) {
     'use server'
+    const me = await requireMember()
     const { error } = await supabase.from('organizations').insert({
+      workspace_id: me.workspace_id,
       name: formData.get('name') as string,
       legal_name: formData.get('legal_name') as string,
       identification_code: formData.get('identification_code') as string,

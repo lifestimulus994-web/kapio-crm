@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { GoogleGenAI, FunctionCallingConfigMode } from '@google/genai'
 import { buildContext, loadKnowledge, tools, runTool } from '@/lib/crm-ai'
+import { getCurrentMember } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
 
@@ -35,9 +36,12 @@ export async function POST(req: Request) {
   // Two modes share this endpoint:
   //  - JSON body  -> "commit": execute a (user-edited) plan. No AI, no audio.
   //  - multipart  -> "plan":   transcribe + propose a plan, write nothing yet.
+  const me = await getCurrentMember()
+  if (!me) return NextResponse.json({ error: 'შესვლა საჭიროა' }, { status: 401 })
+
   const contentType = req.headers.get('content-type') ?? ''
   if (contentType.includes('application/json')) {
-    return commitPlan(req)
+    return commitPlan(req, me.workspace_id)
   }
 
   if (!process.env.GEMINI_API_KEY) {
@@ -78,7 +82,7 @@ export async function POST(req: Request) {
 
   try {
     const [context, knowledge] = await Promise.all([
-      buildContext(),
+      buildContext(me.workspace_id),
       loadKnowledge(),
     ])
     const today = new Date().toISOString().slice(0, 10)
@@ -218,7 +222,7 @@ ${context}`
         } else {
           // Read-only tools (e.g. find_company_contacts) run for real so the
           // proposed company name/details are already corrected and pre-filled.
-          const result = await runTool(name, args)
+          const result = await runTool(name, args, me.workspace_id)
           executed.push({ name, result })
           responseParts.push({ functionResponse: { name, response: result } })
         }
@@ -260,7 +264,7 @@ ${context}`
 // Execute a user-reviewed plan. Runs the (possibly edited) write tools in order
 // so links-by-name resolve (e.g. the organization is created before the contact
 // that references it). No AI call — deterministic and cheap.
-async function commitPlan(req: Request) {
+async function commitPlan(req: Request, workspaceId: string) {
   let plan: { name: string; args: Record<string, unknown> }[] = []
   try {
     const body = (await req.json()) as {
@@ -281,7 +285,7 @@ async function commitPlan(req: Request) {
   const actions: { name: string; result: Record<string, unknown> }[] = []
   for (const item of plan) {
     if (!WRITE_TOOLS.has(item.name)) continue // ignore anything unexpected
-    const result = await runTool(item.name, item.args ?? {})
+    const result = await runTool(item.name, item.args ?? {}, workspaceId)
     actions.push({ name: item.name, result })
   }
 

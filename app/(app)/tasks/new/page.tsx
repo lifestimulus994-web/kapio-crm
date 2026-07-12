@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
+import { requireMember } from '@/lib/auth'
 import type { Organization, Contact, Opportunity } from '@/types'
 import { TASK_PRIORITIES } from '@/types'
 import { ChevronLeft } from 'lucide-react'
@@ -19,16 +20,20 @@ export default async function NewTaskPage({
   searchParams: Promise<{ opp?: string; org?: string; contact?: string }>
 }) {
   const sp = await searchParams
+  const me = await requireMember()
 
   const [orgsRes, contactsRes, oppsRes] = await Promise.all([
-    supabase.from('organizations').select('id, name').order('name'),
+    supabase.from('organizations').select('id, name').eq('workspace_id', me.workspace_id).order('name'),
     supabase
       .from('contacts')
       .select('id, first_name, last_name')
+      .eq('workspace_id', me.workspace_id)
       .order('first_name'),
-    supabase.from('opportunities').select('id, title').order('created_at', {
-      ascending: false,
-    }),
+    supabase
+      .from('opportunities')
+      .select('id, title')
+      .eq('workspace_id', me.workspace_id)
+      .order('created_at', { ascending: false }),
   ])
 
   const orgs = (orgsRes.data ?? []) as Pick<Organization, 'id' | 'name'>[]
@@ -40,6 +45,7 @@ export default async function NewTaskPage({
 
   async function create(formData: FormData) {
     'use server'
+    const owner = await requireMember()
     const startDate = (formData.get('start_date') as string) || null
     const startTime = (formData.get('start_time') as string) || ''
     const durationMin = parseInt((formData.get('duration') as string) || '0', 10)
@@ -60,6 +66,7 @@ export default async function NewTaskPage({
     const { error } = await supabase
       .from('tasks')
       .insert({
+        workspace_id: owner.workspace_id,
         title: formData.get('title') as string,
         description: (formData.get('description') as string) || null,
         start_date: startDate,

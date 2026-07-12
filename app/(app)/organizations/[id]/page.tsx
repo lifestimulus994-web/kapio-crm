@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
+import { requireMember } from '@/lib/auth'
 import type { Organization, Contact, Opportunity, Task, OrganizationComment } from '@/types'
 import CommentThread from '@/components/CommentThread'
 import {
@@ -33,34 +34,40 @@ export default async function OrganizationDetailPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
+  const me = await requireMember()
 
   const [orgRes, contactsRes, oppsRes, tasksRes, freeContactsRes, commentsRes] =
     await Promise.all([
-      supabase.from('organizations').select('*').eq('id', id).single(),
+      supabase.from('organizations').select('*').eq('id', id).eq('workspace_id', me.workspace_id).single(),
       supabase
         .from('contacts')
         .select('*')
         .eq('organization_id', id)
+        .eq('workspace_id', me.workspace_id)
         .order('first_name'),
       supabase
         .from('opportunities')
         .select('*')
         .eq('organization_id', id)
+        .eq('workspace_id', me.workspace_id)
         .order('created_at', { ascending: false }),
       supabase
         .from('tasks')
         .select('*')
         .eq('organization_id', id)
+        .eq('workspace_id', me.workspace_id)
         .order('due_date'),
       supabase
         .from('contacts')
         .select('id, first_name, last_name')
         .is('organization_id', null)
+        .eq('workspace_id', me.workspace_id)
         .order('first_name'),
       supabase
         .from('organization_comments')
         .select('*')
         .eq('organization_id', id)
+        .eq('workspace_id', me.workspace_id)
         .order('created_at', { ascending: true }),
     ])
 
@@ -84,12 +91,14 @@ export default async function OrganizationDetailPage({
 
   async function attachContact(formData: FormData) {
     'use server'
+    const owner = await requireMember()
     const contactId = formData.get('contact_id') as string
     if (!contactId) return
     const { error } = await supabase
       .from('contacts')
       .update({ organization_id: id })
       .eq('id', contactId)
+      .eq('workspace_id', owner.workspace_id)
     if (error) throw new Error(error.message)
     revalidatePath(`/organizations/${id}`)
     revalidatePath('/contacts')
@@ -97,12 +106,13 @@ export default async function OrganizationDetailPage({
 
   async function addComment(formData: FormData) {
     'use server'
+    const owner = await requireMember()
     const body = (formData.get('body') as string)?.trim()
     if (!body) return
     const author = (formData.get('author') as string)?.trim() || 'You'
     const { error } = await supabase
       .from('organization_comments')
-      .insert({ organization_id: id, author, body })
+      .insert({ organization_id: id, workspace_id: owner.workspace_id, author, body })
     if (error) throw new Error(error.message)
     revalidatePath(`/organizations/${id}`)
   }

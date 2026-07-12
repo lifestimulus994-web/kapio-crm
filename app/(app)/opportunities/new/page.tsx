@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
+import { requireMember } from '@/lib/auth'
 import type { Organization, Contact } from '@/types'
 import { STAGES } from '@/types'
 import { ChevronLeft } from 'lucide-react'
@@ -13,11 +14,13 @@ const input =
 const label = 'block text-xs font-medium text-slate-400 mb-1.5'
 
 export default async function NewOpportunityPage() {
+  const me = await requireMember()
   const [orgsRes, contactsRes] = await Promise.all([
-    supabase.from('organizations').select('id, name').order('name'),
+    supabase.from('organizations').select('id, name').eq('workspace_id', me.workspace_id).order('name'),
     supabase
       .from('contacts')
       .select('id, first_name, last_name')
+      .eq('workspace_id', me.workspace_id)
       .order('first_name'),
   ])
 
@@ -29,7 +32,9 @@ export default async function NewOpportunityPage() {
 
   async function create(formData: FormData) {
     'use server'
+    const owner = await requireMember()
     const { error } = await supabase.from('opportunities').insert({
+      workspace_id: owner.workspace_id,
       title: formData.get('title') as string,
       organization_id: (formData.get('organization_id') as string) || null,
       contact_id: (formData.get('contact_id') as string) || null,
@@ -40,8 +45,8 @@ export default async function NewOpportunityPage() {
       notes: (formData.get('notes') as string) || null,
     })
     if (error) throw new Error(error.message)
-    revalidatePath('/')
-    redirect('/')
+    revalidatePath('/dashboard')
+    redirect('/dashboard')
   }
 
   return (
@@ -49,7 +54,7 @@ export default async function NewOpportunityPage() {
       {/* Header */}
       <div className="flex items-center gap-3 mb-7">
         <Link
-          href="/"
+          href="/dashboard"
           className="text-slate-500 hover:text-slate-300 transition-colors"
         >
           <ChevronLeft size={20} />
@@ -171,7 +176,7 @@ export default async function NewOpportunityPage() {
 
         <div className="flex gap-3 pt-1">
           <Link
-            href="/"
+            href="/dashboard"
             className="flex-1 text-center py-2.5 rounded-lg text-sm font-medium bg-slate-800 hover:bg-slate-700 text-slate-400 transition-colors"
           >
             Cancel

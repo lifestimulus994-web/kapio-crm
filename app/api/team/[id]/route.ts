@@ -17,7 +17,20 @@ export async function DELETE(
     return NextResponse.json({ error: 'საკუთარი თავის წაშლა არ შეიძლება' }, { status: 400 })
   }
 
-  await admin.from('members').delete().eq('id', id)
+  // Confirm the target member is actually in the caller's own workspace
+  // before touching anything — an owner must not be able to delete another
+  // workspace's member by id.
+  const { data: target } = await admin
+    .from('members')
+    .select('id')
+    .eq('id', id)
+    .eq('workspace_id', me.workspace_id)
+    .maybeSingle()
+  if (!target) {
+    return NextResponse.json({ error: 'წევრი ვერ მოიძებნა' }, { status: 404 })
+  }
+
+  await admin.from('members').delete().eq('id', id).eq('workspace_id', me.workspace_id)
   await admin.auth.admin.deleteUser(id)
 
   return NextResponse.json({ ok: true })

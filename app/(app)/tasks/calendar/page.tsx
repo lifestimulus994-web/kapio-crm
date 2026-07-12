@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
+import { requireMember } from '@/lib/auth'
 import type { Task, Organization, Contact, Opportunity } from '@/types'
 import { CalendarDays, ListTodo, Plus } from 'lucide-react'
 import TaskCalendar from '@/components/TaskCalendar'
@@ -7,21 +8,25 @@ import TaskCalendar from '@/components/TaskCalendar'
 export const dynamic = 'force-dynamic'
 
 export default async function TasksCalendarPage() {
+  const me = await requireMember()
   const [tasksRes, orgsRes, contactsRes, oppsRes] = await Promise.all([
     supabase
       .from('tasks')
       .select(
         '*, organization:organizations(id, name), contact:contacts(id, first_name, last_name), opportunity:opportunities(id, title)'
       )
+      .eq('workspace_id', me.workspace_id)
       .eq('archived', false),
-    supabase.from('organizations').select('id, name').order('name'),
+    supabase.from('organizations').select('id, name').eq('workspace_id', me.workspace_id).order('name'),
     supabase
       .from('contacts')
       .select('id, first_name, last_name')
+      .eq('workspace_id', me.workspace_id)
       .order('first_name'),
     supabase
       .from('opportunities')
       .select('id, title')
+      .eq('workspace_id', me.workspace_id)
       .order('created_at', { ascending: false }),
   ])
 

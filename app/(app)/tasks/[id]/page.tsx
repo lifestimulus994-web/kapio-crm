@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
+import { requireMember } from '@/lib/auth'
 import type { Task, TaskComment, TaskStatus } from '@/types'
 import {
   ChevronLeft,
@@ -25,6 +26,7 @@ export default async function TaskDetailPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
+  const me = await requireMember()
 
   const [taskRes, commentsRes] = await Promise.all([
     supabase
@@ -33,11 +35,13 @@ export default async function TaskDetailPage({
         '*, organization:organizations(id, name), contact:contacts(id, first_name, last_name), opportunity:opportunities(id, title)'
       )
       .eq('id', id)
+      .eq('workspace_id', me.workspace_id)
       .single(),
     supabase
       .from('task_comments')
       .select('*')
       .eq('task_id', id)
+      .eq('workspace_id', me.workspace_id)
       .order('created_at', { ascending: true }),
   ])
 
@@ -53,10 +57,12 @@ export default async function TaskDetailPage({
 
   async function advanceStatus() {
     'use server'
+    const owner = await requireMember()
     const { error } = await supabase
       .from('tasks')
       .update({ status: nextStatus[task.status] ?? 'todo' })
       .eq('id', id)
+      .eq('workspace_id', owner.workspace_id)
     if (error) throw new Error(error.message)
     revalidatePath(`/tasks/${id}`)
     revalidatePath('/tasks')
@@ -64,13 +70,14 @@ export default async function TaskDetailPage({
 
   async function addComment(formData: FormData) {
     'use server'
+    const owner = await requireMember()
     const body = (formData.get('body') as string)?.trim()
     if (!body) return
     const author =
       (formData.get('author') as string)?.trim() || task.owner || 'You'
     const { error } = await supabase
       .from('task_comments')
-      .insert({ task_id: id, author, body })
+      .insert({ task_id: id, workspace_id: owner.workspace_id, author, body })
     if (error) throw new Error(error.message)
     revalidatePath(`/tasks/${id}`)
   }

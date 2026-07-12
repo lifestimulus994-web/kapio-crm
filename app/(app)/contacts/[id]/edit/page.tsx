@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
+import { requireMember } from '@/lib/auth'
 import type { Contact, Organization } from '@/types'
 import { ChevronLeft, Trash2 } from 'lucide-react'
 
@@ -17,10 +18,11 @@ export default async function EditContactPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
+  const me = await requireMember()
 
   const [contactRes, orgsRes] = await Promise.all([
-    supabase.from('contacts').select('*').eq('id', id).single(),
-    supabase.from('organizations').select('id, name').order('name'),
+    supabase.from('contacts').select('*').eq('id', id).eq('workspace_id', me.workspace_id).single(),
+    supabase.from('organizations').select('id, name').eq('workspace_id', me.workspace_id).order('name'),
   ])
 
   if (contactRes.error || !contactRes.data) {
@@ -32,6 +34,7 @@ export default async function EditContactPage({
 
   async function update(formData: FormData) {
     'use server'
+    const owner = await requireMember()
     const { error } = await supabase
       .from('contacts')
       .update({
@@ -44,6 +47,7 @@ export default async function EditContactPage({
         notes: (formData.get('notes') as string) || null,
       })
       .eq('id', id)
+      .eq('workspace_id', owner.workspace_id)
     if (error) throw new Error(error.message)
     revalidatePath('/contacts')
     revalidatePath(`/contacts/${id}`)
@@ -52,7 +56,12 @@ export default async function EditContactPage({
 
   async function remove() {
     'use server'
-    const { error } = await supabase.from('contacts').delete().eq('id', id)
+    const owner = await requireMember()
+    const { error } = await supabase
+      .from('contacts')
+      .delete()
+      .eq('id', id)
+      .eq('workspace_id', owner.workspace_id)
     if (error) throw new Error(error.message)
     revalidatePath('/contacts')
     redirect('/contacts')

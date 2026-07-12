@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
+import { requireMember } from '@/lib/auth'
 import type { Organization, Contact, Opportunity } from '@/types'
 import { STAGES } from '@/types'
 import { ChevronLeft, Trash2 } from 'lucide-react'
@@ -18,13 +19,15 @@ export default async function EditOpportunityPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
+  const me = await requireMember()
 
   const [oppRes, orgsRes, contactsRes] = await Promise.all([
-    supabase.from('opportunities').select('*').eq('id', id).single(),
-    supabase.from('organizations').select('id, name').order('name'),
+    supabase.from('opportunities').select('*').eq('id', id).eq('workspace_id', me.workspace_id).single(),
+    supabase.from('organizations').select('id, name').eq('workspace_id', me.workspace_id).order('name'),
     supabase
       .from('contacts')
       .select('id, first_name, last_name')
+      .eq('workspace_id', me.workspace_id)
       .order('first_name'),
   ])
 
@@ -41,6 +44,7 @@ export default async function EditOpportunityPage({
 
   async function update(formData: FormData) {
     'use server'
+    const owner = await requireMember()
     const base = {
       title: formData.get('title') as string,
       organization_id: (formData.get('organization_id') as string) || null,
@@ -63,26 +67,33 @@ export default async function EditOpportunityPage({
       .from('opportunities')
       .update({ ...base, ...extra })
       .eq('id', id)
+      .eq('workspace_id', owner.workspace_id)
     // If the new columns aren't migrated yet, retry without them so the save
     // still succeeds.
     if (error && /column .* does not exist/i.test(error.message)) {
       ;({ error } = await supabase
         .from('opportunities')
         .update(base)
-        .eq('id', id))
+        .eq('id', id)
+        .eq('workspace_id', owner.workspace_id))
     }
     if (error) throw new Error(error.message)
-    revalidatePath('/')
+    revalidatePath('/dashboard')
     revalidatePath(`/opportunities/${id}`)
     redirect(`/opportunities/${id}`)
   }
 
   async function remove() {
     'use server'
-    const { error } = await supabase.from('opportunities').delete().eq('id', id)
+    const owner = await requireMember()
+    const { error } = await supabase
+      .from('opportunities')
+      .delete()
+      .eq('id', id)
+      .eq('workspace_id', owner.workspace_id)
     if (error) throw new Error(error.message)
-    revalidatePath('/')
-    redirect('/')
+    revalidatePath('/dashboard')
+    redirect('/dashboard')
   }
 
   return (

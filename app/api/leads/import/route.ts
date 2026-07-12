@@ -39,6 +39,7 @@ export async function POST(request: Request) {
     .from('leads')
     .insert(
       valid.map((r) => ({
+        workspace_id: me.workspace_id,
         full_name: r.full_name.trim(),
         phone: r.phone?.trim() || null,
         email: r.email?.trim() || null,

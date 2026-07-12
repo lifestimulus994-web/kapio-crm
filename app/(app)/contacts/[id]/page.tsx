@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
+import { requireMember } from '@/lib/auth'
 import type { Contact, Opportunity, Organization, Task, ContactComment } from '@/types'
 import { ChevronLeft, Mail, Phone, Briefcase, Building2, Pencil } from 'lucide-react'
 import { formatCurrency, formatDate, fullName } from '@/lib/utils'
@@ -24,28 +25,33 @@ export default async function ContactDetailPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
+  const me = await requireMember()
 
   const [contactRes, oppsRes, tasksRes, orgsRes, commentsRes] = await Promise.all([
     supabase
       .from('contacts')
       .select('*, organization:organizations(id, name)')
       .eq('id', id)
+      .eq('workspace_id', me.workspace_id)
       .single(),
     supabase
       .from('opportunities')
       .select('*')
       .eq('contact_id', id)
+      .eq('workspace_id', me.workspace_id)
       .order('created_at', { ascending: false }),
     supabase
       .from('tasks')
       .select('*')
       .eq('contact_id', id)
+      .eq('workspace_id', me.workspace_id)
       .order('due_date'),
-    supabase.from('organizations').select('id, name').order('name'),
+    supabase.from('organizations').select('id, name').eq('workspace_id', me.workspace_id).order('name'),
     supabase
       .from('contact_comments')
       .select('*')
       .eq('contact_id', id)
+      .eq('workspace_id', me.workspace_id)
       .order('created_at', { ascending: true }),
   ])
 
@@ -63,12 +69,14 @@ export default async function ContactDetailPage({
 
   async function updateOrganization(formData: FormData) {
     'use server'
+    const owner = await requireMember()
     const { error } = await supabase
       .from('contacts')
       .update({
         organization_id: (formData.get('organization_id') as string) || null,
       })
       .eq('id', id)
+      .eq('workspace_id', owner.workspace_id)
     if (error) throw new Error(error.message)
     revalidatePath(`/contacts/${id}`)
     revalidatePath('/contacts')
@@ -76,12 +84,13 @@ export default async function ContactDetailPage({
 
   async function addComment(formData: FormData) {
     'use server'
+    const owner = await requireMember()
     const body = (formData.get('body') as string)?.trim()
     if (!body) return
     const author = (formData.get('author') as string)?.trim() || 'You'
     const { error } = await supabase
       .from('contact_comments')
-      .insert({ contact_id: id, author, body })
+      .insert({ contact_id: id, workspace_id: owner.workspace_id, author, body })
     if (error) throw new Error(error.message)
     revalidatePath(`/contacts/${id}`)
   }

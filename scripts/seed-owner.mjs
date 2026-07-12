@@ -8,9 +8,11 @@ for (const line of readFileSync(envPath, 'utf8').split('\n')) {
   if (match) process.env[match[1]] ??= match[2].trim()
 }
 
-const [, , email, password, fullName] = process.argv
+const [, , email, password, fullName, businessName] = process.argv
 if (!email || !password) {
-  console.error('Usage: node scripts/seed-owner.mjs <email> <password> ["Full Name"]')
+  console.error(
+    'Usage: node scripts/seed-owner.mjs <email> <password> ["Full Name"] ["Business Name"]'
+  )
   process.exit(1)
 }
 
@@ -20,27 +22,21 @@ const admin = createClient(
   { auth: { persistSession: false } }
 )
 
+// No manual `members` insert here — the handle_new_user trigger in schema.sql
+// provisions a brand-new workspace + owner member row automatically from
+// this metadata, the same as a real public /signup would.
 const { data, error } = await admin.auth.admin.createUser({
   email,
   password,
   email_confirm: true,
+  user_metadata: {
+    full_name: fullName || null,
+    business_name: businessName || null,
+  },
 })
 
 if (error || !data.user) {
   console.error('Failed to create auth user:', error?.message)
-  process.exit(1)
-}
-
-const { error: memberError } = await admin.from('members').insert({
-  id: data.user.id,
-  email,
-  full_name: fullName || null,
-  role: 'owner',
-})
-
-if (memberError) {
-  console.error('Failed to create member row:', memberError.message)
-  await admin.auth.admin.deleteUser(data.user.id)
   process.exit(1)
 }
 

@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
+import { requireMember } from '@/lib/auth'
 import { STAGES, type Opportunity, type Task, type OpportunityComment } from '@/types'
 import CommentThread from '@/components/CommentThread'
 import {
@@ -41,6 +42,7 @@ export default async function OpportunityDetailPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
+  const me = await requireMember()
 
   const [oppRes, tasksRes, commentsRes] = await Promise.all([
     supabase
@@ -49,16 +51,19 @@ export default async function OpportunityDetailPage({
         '*, organization:organizations(id, name, email, phone), contact:contacts(id, first_name, last_name, phone, email)'
       )
       .eq('id', id)
+      .eq('workspace_id', me.workspace_id)
       .single(),
     supabase
       .from('tasks')
       .select('*')
       .eq('opportunity_id', id)
+      .eq('workspace_id', me.workspace_id)
       .order('due_date', { ascending: true }),
     supabase
       .from('opportunity_comments')
       .select('*')
       .eq('opportunity_id', id)
+      .eq('workspace_id', me.workspace_id)
       .order('created_at', { ascending: true }),
   ])
 
@@ -76,25 +81,28 @@ export default async function OpportunityDetailPage({
 
   async function setStage(formData: FormData) {
     'use server'
+    const owner = await requireMember()
     const stage = formData.get('stage') as string
     if (!STAGES.includes(stage as (typeof STAGES)[number])) return
     const { error } = await supabase
       .from('opportunities')
       .update({ stage })
       .eq('id', id)
+      .eq('workspace_id', owner.workspace_id)
     if (error) throw new Error(error.message)
     revalidatePath(`/opportunities/${id}`)
-    revalidatePath('/')
+    revalidatePath('/dashboard')
   }
 
   async function addComment(formData: FormData) {
     'use server'
+    const owner = await requireMember()
     const body = (formData.get('body') as string)?.trim()
     if (!body) return
     const author = (formData.get('author') as string)?.trim() || 'You'
     const { error } = await supabase
       .from('opportunity_comments')
-      .insert({ opportunity_id: id, author, body })
+      .insert({ opportunity_id: id, workspace_id: owner.workspace_id, author, body })
     if (error) throw new Error(error.message)
     revalidatePath(`/opportunities/${id}`)
   }
@@ -129,7 +137,7 @@ export default async function OpportunityDetailPage({
       {/* Header */}
       <div className="flex items-start gap-3 mb-5">
         <Link
-          href="/"
+          href="/dashboard"
           className="mt-1 text-slate-500 hover:text-slate-300 transition-colors"
         >
           <ChevronLeft size={20} />

@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
+import { requireMember } from '@/lib/auth'
 import type { Organization } from '@/types'
 import { ChevronLeft, Trash2 } from 'lucide-react'
 
@@ -17,11 +18,13 @@ export default async function EditOrganizationPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
+  const me = await requireMember()
 
   const { data, error } = await supabase
     .from('organizations')
     .select('*')
     .eq('id', id)
+    .eq('workspace_id', me.workspace_id)
     .single()
 
   if (error || !data) {
@@ -32,6 +35,7 @@ export default async function EditOrganizationPage({
 
   async function update(formData: FormData) {
     'use server'
+    const owner = await requireMember()
     const { error } = await supabase
       .from('organizations')
       .update({
@@ -46,6 +50,7 @@ export default async function EditOrganizationPage({
         notes: (formData.get('notes') as string) || null,
       })
       .eq('id', id)
+      .eq('workspace_id', owner.workspace_id)
     if (error) throw new Error(error.message)
     revalidatePath('/organizations')
     revalidatePath(`/organizations/${id}`)
@@ -54,7 +59,12 @@ export default async function EditOrganizationPage({
 
   async function remove() {
     'use server'
-    const { error } = await supabase.from('organizations').delete().eq('id', id)
+    const owner = await requireMember()
+    const { error } = await supabase
+      .from('organizations')
+      .delete()
+      .eq('id', id)
+      .eq('workspace_id', owner.workspace_id)
     if (error) throw new Error(error.message)
     revalidatePath('/organizations')
     redirect('/organizations')

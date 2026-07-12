@@ -9,6 +9,7 @@ export default async function TeamPage() {
   const { data: members } = await admin
     .from('members')
     .select('*')
+    .eq('workspace_id', me.workspace_id)
     .order('created_at', { ascending: true })
 
   return (

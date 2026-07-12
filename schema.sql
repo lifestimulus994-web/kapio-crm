@@ -184,3 +184,117 @@ create table if not exists public.leads (
   created_at  timestamptz not null default now()
 );
 create index if not exists idx_leads_assigned on public.leads(assigned_to);
+
+-- ============================================================================
+-- Multi-tenancy: every signup gets its own isolated workspace. All app code
+-- filters by workspace_id (the service-role client bypasses RLS, so isolation
+-- is enforced in application code, same as every other access rule so far).
+-- ============================================================================
+
+create table if not exists public.workspaces (
+  id         uuid primary key default gen_random_uuid(),
+  name       text not null,
+  created_at timestamptz not null default now()
+);
+
+-- Added nullable first since existing rows have none yet. After running this
+-- file: backfill your existing data into one workspace, THEN run the
+-- `set not null` block further down.
+alter table public.members               add column if not exists workspace_id uuid references public.workspaces(id);
+alter table public.organizations         add column if not exists workspace_id uuid references public.workspaces(id);
+alter table public.contacts              add column if not exists workspace_id uuid references public.workspaces(id);
+alter table public.opportunities         add column if not exists workspace_id uuid references public.workspaces(id);
+alter table public.tasks                 add column if not exists workspace_id uuid references public.workspaces(id);
+alter table public.leads                 add column if not exists workspace_id uuid references public.workspaces(id);
+alter table public.organization_comments add column if not exists workspace_id uuid references public.workspaces(id);
+alter table public.contact_comments      add column if not exists workspace_id uuid references public.workspaces(id);
+alter table public.opportunity_comments  add column if not exists workspace_id uuid references public.workspaces(id);
+alter table public.task_comments         add column if not exists workspace_id uuid references public.workspaces(id);
+
+create index if not exists idx_members_workspace       on public.members(workspace_id);
+create index if not exists idx_organizations_workspace on public.organizations(workspace_id);
+create index if not exists idx_contacts_workspace       on public.contacts(workspace_id);
+create index if not exists idx_opportunities_workspace  on public.opportunities(workspace_id);
+create index if not exists idx_tasks_workspace          on public.tasks(workspace_id);
+create index if not exists idx_leads_workspace          on public.leads(workspace_id);
+
+-- Auto-provisions a member row for every NEW auth.users row — both paths:
+--   - Self-signup (supabase.auth.signUp, the public /signup form): gets a
+--     BRAND NEW workspace, role 'owner'. Identified by the ABSENCE of
+--     invited_workspace_id in the user's metadata.
+--   - Owner-invited teammate (app/api/team/route.ts, admin.auth.admin.createUser):
+--     that route passes user_metadata.invited_workspace_id = the inviting
+--     owner's workspace_id, so this trigger joins them to THAT workspace
+--     instead of minting a new one, role 'member'. The route itself does NOT
+--     insert into members separately — this trigger is the only writer, so
+--     there's no duplicate-key race between the two.
+create or replace function public.handle_new_user()
+returns trigger as $$
+declare
+  new_workspace_id uuid;
+  invited_id uuid;
+begin
+  invited_id := (new.raw_user_meta_data->>'invited_workspace_id')::uuid;
+
+  if invited_id is not null then
+    insert into public.members (id, workspace_id, email, full_name, role)
+    values (new.id, invited_id, new.email, new.raw_user_meta_data->>'full_name', 'member')
+    on conflict (id) do nothing;
+    return new;
+  end if;
+
+  insert into public.workspaces (name)
+  values (coalesce(new.raw_user_meta_data->>'business_name', 'My Business'))
+  returning id into new_workspace_id;
+
+  insert into public.members (id, workspace_id, email, full_name, role)
+  values (new.id, new_workspace_id, new.email, new.raw_user_meta_data->>'full_name', 'owner')
+  on conflict (id) do nothing;
+
+  return new;
+end;
+$$ language plpgsql security definer;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();
+
+-- ---------------------------------------------------------------------------
+-- ONE-TIME MANUAL STEP for existing data: run this AFTER the alter table
+-- blocks above, BEFORE relying on workspace_id anywhere. Creates a workspace
+-- for your existing business and backfills every row + your own member row
+-- into it. Safe to re-run (idempotent via the "still null" guards).
+-- ---------------------------------------------------------------------------
+-- do $$
+-- declare
+--   kapio_workspace_id uuid;
+-- begin
+--   select id into kapio_workspace_id from public.workspaces where name = 'Kapio' limit 1;
+--   if kapio_workspace_id is null then
+--     insert into public.workspaces (name) values ('Kapio') returning id into kapio_workspace_id;
+--   end if;
+--
+--   update public.members               set workspace_id = kapio_workspace_id where workspace_id is null;
+--   update public.organizations         set workspace_id = kapio_workspace_id where workspace_id is null;
+--   update public.contacts              set workspace_id = kapio_workspace_id where workspace_id is null;
+--   update public.opportunities         set workspace_id = kapio_workspace_id where workspace_id is null;
+--   update public.tasks                 set workspace_id = kapio_workspace_id where workspace_id is null;
+--   update public.leads                 set workspace_id = kapio_workspace_id where workspace_id is null;
+--   update public.organization_comments set workspace_id = kapio_workspace_id where workspace_id is null;
+--   update public.contact_comments      set workspace_id = kapio_workspace_id where workspace_id is null;
+--   update public.opportunity_comments  set workspace_id = kapio_workspace_id where workspace_id is null;
+--   update public.task_comments         set workspace_id = kapio_workspace_id where workspace_id is null;
+-- end $$;
+--
+-- -- Only after the backfill above has actually run:
+-- alter table public.members               alter column workspace_id set not null;
+-- alter table public.organizations         alter column workspace_id set not null;
+-- alter table public.contacts              alter column workspace_id set not null;
+-- alter table public.opportunities         alter column workspace_id set not null;
+-- alter table public.tasks                 alter column workspace_id set not null;
+-- alter table public.leads                 alter column workspace_id set not null;
+-- alter table public.organization_comments alter column workspace_id set not null;
+-- alter table public.contact_comments      alter column workspace_id set not null;
+-- alter table public.opportunity_comments  alter column workspace_id set not null;
+-- alter table public.task_comments         alter column workspace_id set not null;

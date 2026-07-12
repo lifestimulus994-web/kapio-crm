@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 
 export default function LoginPage() {
@@ -26,7 +27,7 @@ export default function LoginPage() {
       return
     }
 
-    router.push('/')
+    router.push('/dashboard')
     router.refresh()
   }
 
@@ -75,6 +76,13 @@ export default function LoginPage() {
         >
           {loading ? 'შესვლა...' : 'შესვლა'}
         </button>
+
+        <p className="text-center text-xs text-slate-500">
+          ჯერ არ გაქვს ანგარიში?{' '}
+          <Link href="/signup" className="text-emerald-400 hover:text-emerald-300">
+            დარეგისტრირდი
+          </Link>
+        </p>
       </form>
     </div>
   )

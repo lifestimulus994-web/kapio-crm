@@ -4,6 +4,7 @@ import { supabase as admin } from '@/lib/supabase'
 
 export type Member = {
   id: string
+  workspace_id: string
   email: string
   full_name: string | null
   role: 'owner' | 'member'
@@ -31,6 +32,6 @@ export async function requireMember(): Promise<Member> {
 
 export async function requireOwner(): Promise<Member> {
   const member = await requireMember()
-  if (member.role !== 'owner') redirect('/')
+  if (member.role !== 'owner') redirect('/dashboard')
   return member
 }

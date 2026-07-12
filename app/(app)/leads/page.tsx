@@ -18,6 +18,7 @@ export default async function LeadsPage() {
   let query = supabase
     .from('leads')
     .select('*, assignee:members(id, full_name, email)')
+    .eq('workspace_id', me.workspace_id)
     .order('created_at', { ascending: false })
 
   if (me.role !== 'owner') {

@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
+import { requireMember } from '@/lib/auth'
 import type { Organization } from '@/types'
 import { ChevronLeft } from 'lucide-react'
 
@@ -17,17 +18,21 @@ export default async function NewContactPage({
   searchParams: Promise<{ org?: string }>
 }) {
   const { org: preselectedOrg } = await searchParams
+  const me = await requireMember()
 
   const { data: orgsData } = await supabase
     .from('organizations')
     .select('id, name')
+    .eq('workspace_id', me.workspace_id)
     .order('name')
 
   const orgs = (orgsData ?? []) as Pick<Organization, 'id' | 'name'>[]
 
   async function create(formData: FormData) {
     'use server'
+    const owner = await requireMember()
     const { error } = await supabase.from('contacts').insert({
+      workspace_id: owner.workspace_id,
       first_name: formData.get('first_name') as string,
       last_name: formData.get('last_name') as string,
       organization_id: (formData.get('organization_id') as string) || null,

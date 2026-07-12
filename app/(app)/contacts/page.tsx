@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+import { requireMember } from '@/lib/auth'
 import type { Contact } from '@/types'
 import { fullName } from '@/lib/utils'
 import RecordsTable, { type TableRow } from '@/components/RecordsTable'
@@ -6,9 +7,11 @@ import RecordsTable, { type TableRow } from '@/components/RecordsTable'
 export const dynamic = 'force-dynamic'
 
 export default async function ContactsPage() {
+  const me = await requireMember()
   const { data, error } = await supabase
     .from('contacts')
     .select('*, organization:organizations(id, name)')
+    .eq('workspace_id', me.workspace_id)
     .eq('archived', false)
     .order('first_name')
 

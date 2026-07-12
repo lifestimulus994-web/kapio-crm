@@ -17,13 +17,19 @@ export default async function NewLeadPage() {
   const isOwner = me.role === 'owner'
 
   const { data: membersData } = isOwner
-    ? await supabase.from('members').select('id, full_name, email').order('full_name')
+    ? await supabase
+        .from('members')
+        .select('id, full_name, email')
+        .eq('workspace_id', me.workspace_id)
+        .order('full_name')
     : { data: null }
   const members = (membersData ?? []) as { id: string; full_name: string | null; email: string }[]
 
   async function create(formData: FormData) {
     'use server'
+    const owner = await requireMember()
     const { error } = await supabase.from('leads').insert({
+      workspace_id: owner.workspace_id,
       full_name: formData.get('full_name') as string,
       phone: (formData.get('phone') as string) || null,
       email: (formData.get('email') as string) || null,

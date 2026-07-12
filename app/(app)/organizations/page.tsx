@@ -1,13 +1,16 @@
 import { supabase } from '@/lib/supabase'
+import { requireMember } from '@/lib/auth'
 import type { Organization } from '@/types'
 import RecordsTable, { type TableRow } from '@/components/RecordsTable'
 
 export const dynamic = 'force-dynamic'
 
 export default async function OrganizationsPage() {
+  const me = await requireMember()
   const { data, error } = await supabase
     .from('organizations')
     .select('*')
+    .eq('workspace_id', me.workspace_id)
     .eq('archived', false)
     .order('name')
 

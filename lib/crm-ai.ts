@@ -20,28 +20,35 @@ export async function loadKnowledge(): Promise<string> {
 
 // Shared CRM "AI brain": the data snapshot we give the model, the tool
 // (function-calling) definitions, and the executor that performs the writes.
-// Used by both the text chat route and the voice-import route.
+// Used by both the text chat route and the voice-import route. Every entry
+// point is workspace-scoped — the caller (chat/voice route) fetches the
+// current member and passes their workspace_id in, so one tenant's AI turn
+// can never read or write another tenant's data via the service-role client.
 
 // ---------- CRM context snapshot ----------
-export async function buildContext() {
+export async function buildContext(workspaceId: string) {
   const [orgs, contacts, opps, tasks] = await Promise.all([
     supabase
       .from('organizations')
       .select('id, name, industry, email, phone')
+      .eq('workspace_id', workspaceId)
       .eq('archived', false),
     supabase
       .from('contacts')
       .select('id, first_name, last_name, job_title, email, phone, organization_id')
+      .eq('workspace_id', workspaceId)
       .eq('archived', false),
     supabase
       .from('opportunities')
       .select('id, title, value_gel, stage, organization_id, contact_id')
+      .eq('workspace_id', workspaceId)
       .eq('archived', false),
     supabase
       .from('tasks')
       .select(
         'id, title, status, priority, owner, start_date, due_date, start_at, end_at, organization_id, contact_id, opportunity_id'
       )
+      .eq('workspace_id', workspaceId)
       .eq('archived', false),
   ])
   return JSON.stringify({
@@ -209,9 +216,14 @@ Do NOT guess or fabricate. Never return passwords or private credentials.`
 }
 
 // ---------- helpers to resolve names -> ids (so we reuse existing records) ----------
-async function resolveOrgId(name?: string): Promise<string | null> {
+// All scoped to the caller's workspace_id — a name/title match can never
+// resolve to another tenant's row.
+async function resolveOrgId(workspaceId: string, name?: string): Promise<string | null> {
   if (!name) return null
-  const { data } = await supabase.from('organizations').select('id, name')
+  const { data } = await supabase
+    .from('organizations')
+    .select('id, name')
+    .eq('workspace_id', workspaceId)
   const target = name.toLowerCase().trim()
   const list = data ?? []
   // Exact match first; then a loose contains-match either way, so a misheard or
@@ -225,11 +237,12 @@ async function resolveOrgId(name?: string): Promise<string | null> {
   return partial?.id ?? null
 }
 
-async function resolveContactId(name?: string): Promise<string | null> {
+async function resolveContactId(workspaceId: string, name?: string): Promise<string | null> {
   if (!name) return null
   const { data } = await supabase
     .from('contacts')
     .select('id, first_name, last_name')
+    .eq('workspace_id', workspaceId)
   const target = name.toLowerCase().trim()
   const hit = (data ?? []).find((c) => {
     const full = `${c.first_name ?? ''} ${c.last_name ?? ''}`
@@ -240,9 +253,12 @@ async function resolveContactId(name?: string): Promise<string | null> {
   return hit?.id ?? null
 }
 
-async function resolveOpportunityId(title?: string): Promise<string | null> {
+async function resolveOpportunityId(workspaceId: string, title?: string): Promise<string | null> {
   if (!title) return null
-  const { data } = await supabase.from('opportunities').select('id, title')
+  const { data } = await supabase
+    .from('opportunities')
+    .select('id, title')
+    .eq('workspace_id', workspaceId)
   const target = title.toLowerCase().trim()
   const hit =
     (data ?? []).find((o) => o.title?.toLowerCase().trim() === target) ??
@@ -252,50 +268,58 @@ async function resolveOpportunityId(title?: string): Promise<string | null> {
 
 // Exact-name lookup used to dedup creates (a retried request shouldn't insert
 // a second record for the same company/person/deal/task).
-async function findExactOrgId(name: string): Promise<string | null> {
+async function findExactOrgId(workspaceId: string, name: string): Promise<string | null> {
   const { data } = await supabase
     .from('organizations')
     .select('id, name')
+    .eq('workspace_id', workspaceId)
     .ilike('name', name)
     .limit(1)
     .maybeSingle()
   return data?.id ?? null
 }
 async function findExactContactId(
+  workspaceId: string,
   firstName: string,
   lastName: string
 ): Promise<string | null> {
   const { data } = await supabase
     .from('contacts')
     .select('id, first_name, last_name')
+    .eq('workspace_id', workspaceId)
     .ilike('first_name', firstName)
     .ilike('last_name', lastName || '')
     .limit(1)
     .maybeSingle()
   return data?.id ?? null
 }
-async function findExactOpportunityId(title: string): Promise<string | null> {
+async function findExactOpportunityId(workspaceId: string, title: string): Promise<string | null> {
   const { data } = await supabase
     .from('opportunities')
     .select('id, title')
+    .eq('workspace_id', workspaceId)
     .ilike('title', title)
     .limit(1)
     .maybeSingle()
   return data?.id ?? null
 }
-async function findExactTaskId(title: string): Promise<string | null> {
+async function findExactTaskId(workspaceId: string, title: string): Promise<string | null> {
   const { data } = await supabase
     .from('tasks')
     .select('id, title')
+    .eq('workspace_id', workspaceId)
     .ilike('title', title)
     .limit(1)
     .maybeSingle()
   return data?.id ?? null
 }
 
-async function resolveTaskId(title?: string): Promise<string | null> {
+async function resolveTaskId(workspaceId: string, title?: string): Promise<string | null> {
   if (!title) return null
-  const { data } = await supabase.from('tasks').select('id, title')
+  const { data } = await supabase
+    .from('tasks')
+    .select('id, title')
+    .eq('workspace_id', workspaceId)
   const target = title.toLowerCase().trim()
   const hit =
     (data ?? []).find((t) => t.title?.toLowerCase().trim() === target) ??
@@ -797,10 +821,11 @@ async function logToolFailure(
 // whole chat/voice turn — every call site gets this automatically.
 export async function runTool(
   name: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  workspaceId: string
 ): Promise<Record<string, unknown>> {
   try {
-    return await runToolInner(name, args)
+    return await runToolInner(name, args, workspaceId)
   } catch (error) {
     await logToolFailure(name, args, error)
     return {
@@ -812,7 +837,8 @@ export async function runTool(
 
 async function runToolInner(
   name: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  workspaceId: string
 ): Promise<Record<string, unknown>> {
   const str = (v: unknown) =>
     typeof v === 'string' && v.trim() ? v.trim() : null
@@ -855,7 +881,7 @@ async function runToolInner(
 
   if (name === 'create_organization') {
     const orgName = str(args.name) ?? 'Untitled'
-    const existingId = await findExactOrgId(orgName)
+    const existingId = await findExactOrgId(workspaceId, orgName)
     if (existingId) {
       return {
         success: true,
@@ -866,6 +892,7 @@ async function runToolInner(
     const { data, error } = await supabase
       .from('organizations')
       .insert({
+        workspace_id: workspaceId,
         name: str(args.name) ?? 'Untitled',
         legal_name: str(args.legal_name) ?? '',
         identification_code: str(args.identification_code) ?? '',
@@ -884,7 +911,7 @@ async function runToolInner(
   }
 
   if (name === 'update_organization') {
-    const orgId = await resolveOrgId(str(args.organization_name) ?? undefined)
+    const orgId = await resolveOrgId(workspaceId, str(args.organization_name) ?? undefined)
     if (!orgId)
       return {
         success: false,
@@ -907,6 +934,7 @@ async function runToolInner(
       .from('organizations')
       .update(patch)
       .eq('id', orgId)
+      .eq('workspace_id', workspaceId)
       .select('id, name')
       .single()
     if (error) return { success: false, error: error.message }
@@ -935,7 +963,7 @@ async function runToolInner(
   if (name === 'create_contact') {
     const firstName = str(args.first_name) ?? 'Unknown'
     const lastName = str(args.last_name) ?? ''
-    const existingId = await findExactContactId(firstName, lastName)
+    const existingId = await findExactContactId(workspaceId, firstName, lastName)
     if (existingId) {
       return {
         success: true,
@@ -943,10 +971,11 @@ async function runToolInner(
         note: 'already existed, reused',
       }
     }
-    const orgId = await resolveOrgId(str(args.organization_name) ?? undefined)
+    const orgId = await resolveOrgId(workspaceId, str(args.organization_name) ?? undefined)
     const { data, error } = await supabase
       .from('contacts')
       .insert({
+        workspace_id: workspaceId,
         first_name: firstName,
         last_name: lastName,
         job_title: str(args.job_title),
@@ -972,7 +1001,7 @@ async function runToolInner(
 
   if (name === 'create_opportunity') {
     const title = str(args.title) ?? 'Untitled deal'
-    const existingId = await findExactOpportunityId(title)
+    const existingId = await findExactOpportunityId(workspaceId, title)
     if (existingId) {
       return {
         success: true,
@@ -981,8 +1010,8 @@ async function runToolInner(
       }
     }
     const [orgId, contactId] = await Promise.all([
-      resolveOrgId(str(args.organization_name) ?? undefined),
-      resolveContactId(str(args.contact_name) ?? undefined),
+      resolveOrgId(workspaceId, str(args.organization_name) ?? undefined),
+      resolveContactId(workspaceId, str(args.contact_name) ?? undefined),
     ])
     const stage = STAGES.includes(String(args.stage))
       ? String(args.stage)
@@ -990,6 +1019,7 @@ async function runToolInner(
     const { data, error } = await supabase
       .from('opportunities')
       .insert({
+        workspace_id: workspaceId,
         title,
         value_gel: num(args.value_gel),
         stage,
@@ -1002,13 +1032,13 @@ async function runToolInner(
       .select('id, title, value_gel, stage')
       .single()
     if (error) return { success: false, error: error.message }
-    revalidatePath('/')
+    revalidatePath('/dashboard')
     return { success: true, created: data }
   }
 
   if (name === 'create_task') {
     const title = str(args.title) ?? 'Untitled task'
-    const existingId = await findExactTaskId(title)
+    const existingId = await findExactTaskId(workspaceId, title)
     if (existingId) {
       return {
         success: true,
@@ -1017,9 +1047,9 @@ async function runToolInner(
       }
     }
     const [orgId, contactId, oppId] = await Promise.all([
-      resolveOrgId(str(args.organization_name) ?? undefined),
-      resolveContactId(str(args.contact_name) ?? undefined),
-      resolveOpportunityId(str(args.opportunity_title) ?? undefined),
+      resolveOrgId(workspaceId, str(args.organization_name) ?? undefined),
+      resolveContactId(workspaceId, str(args.contact_name) ?? undefined),
+      resolveOpportunityId(workspaceId, str(args.opportunity_title) ?? undefined),
     ])
     const allowed = ['todo', 'in_progress', 'done']
     const status = allowed.includes(String(args.status))
@@ -1043,6 +1073,7 @@ async function runToolInner(
     const { data, error } = await supabase
       .from('tasks')
       .insert({
+        workspace_id: workspaceId,
         title,
         description: str(args.description),
         start_date: str(args.start_date),
@@ -1064,6 +1095,7 @@ async function runToolInner(
 
   if (name === 'update_opportunity') {
     const oppId = await resolveOpportunityId(
+      workspaceId,
       str(args.opportunity_title) ?? undefined
     )
     if (!oppId)
@@ -1079,12 +1111,12 @@ async function runToolInner(
 
     const warnings: string[] = []
     if (str(args.organization_name)) {
-      const linkOrgId = await resolveOrgId(str(args.organization_name)!)
+      const linkOrgId = await resolveOrgId(workspaceId, str(args.organization_name)!)
       if (linkOrgId) patch.organization_id = linkOrgId
       else warnings.push(`company "${args.organization_name}" not found`)
     }
     if (str(args.contact_name)) {
-      const linkContactId = await resolveContactId(str(args.contact_name)!)
+      const linkContactId = await resolveContactId(workspaceId, str(args.contact_name)!)
       if (linkContactId) patch.contact_id = linkContactId
       else warnings.push(`contact "${args.contact_name}" not found`)
     }
@@ -1099,15 +1131,16 @@ async function runToolInner(
       .from('opportunities')
       .update(patch)
       .eq('id', oppId)
+      .eq('workspace_id', workspaceId)
       .select('id, title, value_gel, stage')
       .single()
     if (error) return { success: false, error: error.message }
-    revalidatePath('/')
+    revalidatePath('/dashboard')
     return { success: true, updated: data, ...(warnings.length ? { warnings } : {}) }
   }
 
   if (name === 'update_task') {
-    const taskId = await resolveTaskId(str(args.task_title) ?? undefined)
+    const taskId = await resolveTaskId(workspaceId, str(args.task_title) ?? undefined)
     if (!taskId)
       return { success: false, error: `Task "${args.task_title}" not found.` }
     const patch: Record<string, unknown> = {}
@@ -1136,17 +1169,17 @@ async function runToolInner(
     // Resolve links by name; warn (don't fail) if a named record isn't found.
     const warnings: string[] = []
     if (str(args.organization_name)) {
-      const orgId = await resolveOrgId(str(args.organization_name)!)
+      const orgId = await resolveOrgId(workspaceId, str(args.organization_name)!)
       if (orgId) patch.organization_id = orgId
       else warnings.push(`company "${args.organization_name}" not found`)
     }
     if (str(args.contact_name)) {
-      const contactId = await resolveContactId(str(args.contact_name)!)
+      const contactId = await resolveContactId(workspaceId, str(args.contact_name)!)
       if (contactId) patch.contact_id = contactId
       else warnings.push(`contact "${args.contact_name}" not found`)
     }
     if (str(args.opportunity_title)) {
-      const oppId = await resolveOpportunityId(str(args.opportunity_title)!)
+      const oppId = await resolveOpportunityId(workspaceId, str(args.opportunity_title)!)
       if (oppId) patch.opportunity_id = oppId
       else warnings.push(`opportunity "${args.opportunity_title}" not found`)
     }
@@ -1161,6 +1194,7 @@ async function runToolInner(
       .from('tasks')
       .update(patch)
       .eq('id', taskId)
+      .eq('workspace_id', workspaceId)
       .select(
         'id, title, status, priority, due_date, organization_id, contact_id, opportunity_id'
       )
@@ -1172,7 +1206,7 @@ async function runToolInner(
   }
 
   if (name === 'add_task_comment') {
-    const taskId = await resolveTaskId(str(args.task_title) ?? undefined)
+    const taskId = await resolveTaskId(workspaceId, str(args.task_title) ?? undefined)
     if (!taskId)
       return { success: false, error: `Task "${args.task_title}" not found.` }
     const body = str(args.body)
@@ -1181,6 +1215,7 @@ async function runToolInner(
       .from('task_comments')
       .insert({
         task_id: taskId,
+        workspace_id: workspaceId,
         author: str(args.author) ?? 'AI Assistant',
         body,
       })
@@ -1193,6 +1228,7 @@ async function runToolInner(
 
   if (name === 'add_opportunity_comment') {
     const oppId = await resolveOpportunityId(
+      workspaceId,
       str(args.opportunity_title) ?? undefined
     )
     if (!oppId)
@@ -1206,6 +1242,7 @@ async function runToolInner(
       .from('opportunity_comments')
       .insert({
         opportunity_id: oppId,
+        workspace_id: workspaceId,
         author: str(args.author) ?? 'AI Assistant',
         body,
       })
@@ -1217,7 +1254,7 @@ async function runToolInner(
   }
 
   if (name === 'add_organization_comment') {
-    const orgId = await resolveOrgId(str(args.organization_name) ?? undefined)
+    const orgId = await resolveOrgId(workspaceId, str(args.organization_name) ?? undefined)
     if (!orgId)
       return { success: false, error: `Company "${args.organization_name}" not found.` }
     const body = str(args.body)
@@ -1226,6 +1263,7 @@ async function runToolInner(
       .from('organization_comments')
       .insert({
         organization_id: orgId,
+        workspace_id: workspaceId,
         author: str(args.author) ?? 'AI Assistant',
         body,
       })
@@ -1237,7 +1275,7 @@ async function runToolInner(
   }
 
   if (name === 'add_contact_comment') {
-    const contactId = await resolveContactId(str(args.contact_name) ?? undefined)
+    const contactId = await resolveContactId(workspaceId, str(args.contact_name) ?? undefined)
     if (!contactId)
       return { success: false, error: `Contact "${args.contact_name}" not found.` }
     const body = str(args.body)
@@ -1246,6 +1284,7 @@ async function runToolInner(
       .from('contact_comments')
       .insert({
         contact_id: contactId,
+        workspace_id: workspaceId,
         author: str(args.author) ?? 'AI Assistant',
         body,
       })
@@ -1260,7 +1299,8 @@ async function runToolInner(
     const target = str(args.first_name)
     if (!target) return { success: false, error: 'first_name is required to find the contact.' }
     const fullTarget = `${target} ${str(args.last_name) ?? ''}`.trim()
-    const contactId = await resolveContactId(fullTarget) ?? await resolveContactId(target)
+    const contactId =
+      (await resolveContactId(workspaceId, fullTarget)) ?? (await resolveContactId(workspaceId, target))
     if (!contactId)
       return { success: false, error: `Contact "${fullTarget}" not found.` }
     const patch: Record<string, unknown> = {}
@@ -1273,7 +1313,7 @@ async function runToolInner(
 
     const warnings: string[] = []
     if (str(args.organization_name)) {
-      const orgId = await resolveOrgId(str(args.organization_name)!)
+      const orgId = await resolveOrgId(workspaceId, str(args.organization_name)!)
       if (orgId) patch.organization_id = orgId
       else warnings.push(`company "${args.organization_name}" not found`)
     }
@@ -1288,6 +1328,7 @@ async function runToolInner(
       .from('contacts')
       .update(patch)
       .eq('id', contactId)
+      .eq('workspace_id', workspaceId)
       .select('id, first_name, last_name')
       .single()
     if (error) return { success: false, error: error.message }
@@ -1303,46 +1344,55 @@ async function runToolInner(
       return { success: false, error: 'entity and name_or_id are required.' }
 
     if (entity === 'organization') {
-      const id = (await resolveOrgId(nameOrId)) ?? nameOrId
+      const id = (await resolveOrgId(workspaceId, nameOrId)) ?? nameOrId
       const { data, error } = await supabase
         .from('organizations')
         .select('*')
         .eq('id', id)
+        .eq('workspace_id', workspaceId)
         .maybeSingle()
       if (error || !data) return { success: false, error: `Organization "${nameOrId}" not found.` }
       return { success: true, record: data }
     }
     if (entity === 'contact') {
-      const id = (await resolveContactId(nameOrId)) ?? nameOrId
+      const id = (await resolveContactId(workspaceId, nameOrId)) ?? nameOrId
       const { data, error } = await supabase
         .from('contacts')
         .select('*')
         .eq('id', id)
+        .eq('workspace_id', workspaceId)
         .maybeSingle()
       if (error || !data) return { success: false, error: `Contact "${nameOrId}" not found.` }
       return { success: true, record: data }
     }
     if (entity === 'opportunity') {
-      const id = (await resolveOpportunityId(nameOrId)) ?? nameOrId
+      const id = (await resolveOpportunityId(workspaceId, nameOrId)) ?? nameOrId
       const [{ data, error }, { data: comments }] = await Promise.all([
-        supabase.from('opportunities').select('*').eq('id', id).maybeSingle(),
+        supabase
+          .from('opportunities')
+          .select('*')
+          .eq('id', id)
+          .eq('workspace_id', workspaceId)
+          .maybeSingle(),
         supabase
           .from('opportunity_comments')
           .select('author, body, created_at')
           .eq('opportunity_id', id)
+          .eq('workspace_id', workspaceId)
           .order('created_at', { ascending: false }),
       ])
       if (error || !data) return { success: false, error: `Opportunity "${nameOrId}" not found.` }
       return { success: true, record: data, comments: comments ?? [] }
     }
     if (entity === 'task') {
-      const id = (await resolveTaskId(nameOrId)) ?? nameOrId
+      const id = (await resolveTaskId(workspaceId, nameOrId)) ?? nameOrId
       const [{ data, error }, { data: comments }] = await Promise.all([
-        supabase.from('tasks').select('*').eq('id', id).maybeSingle(),
+        supabase.from('tasks').select('*').eq('id', id).eq('workspace_id', workspaceId).maybeSingle(),
         supabase
           .from('task_comments')
           .select('author, body, created_at')
           .eq('task_id', id)
+          .eq('workspace_id', workspaceId)
           .order('created_at', { ascending: false }),
       ])
       if (error || !data) return { success: false, error: `Task "${nameOrId}" not found.` }
@@ -1352,52 +1402,56 @@ async function runToolInner(
   }
 
   if (name === 'archive_organization') {
-    const orgId = await resolveOrgId(str(args.organization_name) ?? undefined)
+    const orgId = await resolveOrgId(workspaceId, str(args.organization_name) ?? undefined)
     if (!orgId)
       return { success: false, error: `Company "${args.organization_name}" not found.` }
     const { error } = await supabase
       .from('organizations')
       .update({ archived: true })
       .eq('id', orgId)
+      .eq('workspace_id', workspaceId)
     if (error) return { success: false, error: error.message }
     revalidatePath('/organizations')
     return { success: true, archived: { id: orgId } }
   }
 
   if (name === 'archive_contact') {
-    const contactId = await resolveContactId(str(args.contact_name) ?? undefined)
+    const contactId = await resolveContactId(workspaceId, str(args.contact_name) ?? undefined)
     if (!contactId)
       return { success: false, error: `Contact "${args.contact_name}" not found.` }
     const { error } = await supabase
       .from('contacts')
       .update({ archived: true })
       .eq('id', contactId)
+      .eq('workspace_id', workspaceId)
     if (error) return { success: false, error: error.message }
     revalidatePath('/contacts')
     return { success: true, archived: { id: contactId } }
   }
 
   if (name === 'archive_opportunity') {
-    const oppId = await resolveOpportunityId(str(args.opportunity_title) ?? undefined)
+    const oppId = await resolveOpportunityId(workspaceId, str(args.opportunity_title) ?? undefined)
     if (!oppId)
       return { success: false, error: `Opportunity "${args.opportunity_title}" not found.` }
     const { error } = await supabase
       .from('opportunities')
       .update({ archived: true })
       .eq('id', oppId)
+      .eq('workspace_id', workspaceId)
     if (error) return { success: false, error: error.message }
-    revalidatePath('/')
+    revalidatePath('/dashboard')
     return { success: true, archived: { id: oppId } }
   }
 
   if (name === 'archive_task') {
-    const taskId = await resolveTaskId(str(args.task_title) ?? undefined)
+    const taskId = await resolveTaskId(workspaceId, str(args.task_title) ?? undefined)
     if (!taskId)
       return { success: false, error: `Task "${args.task_title}" not found.` }
     const { error } = await supabase
       .from('tasks')
       .update({ archived: true })
       .eq('id', taskId)
+      .eq('workspace_id', workspaceId)
     if (error) return { success: false, error: error.message }
     revalidatePath('/tasks')
     return { success: true, archived: { id: taskId } }

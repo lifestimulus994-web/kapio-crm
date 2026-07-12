@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { supabase } from '@/lib/supabase'
+import { requireMember } from '@/lib/auth'
 import type { Organization, Contact, Opportunity, Task } from '@/types'
 import { TASK_PRIORITIES } from '@/types'
 import { ChevronLeft, Trash2 } from 'lucide-react'
@@ -19,17 +20,20 @@ export default async function EditTaskPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
+  const me = await requireMember()
 
   const [taskRes, orgsRes, contactsRes, oppsRes] = await Promise.all([
-    supabase.from('tasks').select('*').eq('id', id).single(),
-    supabase.from('organizations').select('id, name').order('name'),
+    supabase.from('tasks').select('*').eq('id', id).eq('workspace_id', me.workspace_id).single(),
+    supabase.from('organizations').select('id, name').eq('workspace_id', me.workspace_id).order('name'),
     supabase
       .from('contacts')
       .select('id, first_name, last_name')
+      .eq('workspace_id', me.workspace_id)
       .order('first_name'),
     supabase
       .from('opportunities')
       .select('id, title')
+      .eq('workspace_id', me.workspace_id)
       .order('created_at', { ascending: false }),
   ])
 
@@ -47,6 +51,7 @@ export default async function EditTaskPage({
 
   async function update(formData: FormData) {
     'use server'
+    const owner = await requireMember()
     const { error } = await supabase
       .from('tasks')
       .update({
@@ -62,6 +67,7 @@ export default async function EditTaskPage({
         contact_id: (formData.get('contact_id') as string) || null,
       })
       .eq('id', id)
+      .eq('workspace_id', owner.workspace_id)
     if (error) throw new Error(error.message)
     revalidatePath('/tasks')
     revalidatePath(`/tasks/${id}`)
@@ -70,7 +76,12 @@ export default async function EditTaskPage({
 
   async function remove() {
     'use server'
-    const { error } = await supabase.from('tasks').delete().eq('id', id)
+    const owner = await requireMember()
+    const { error } = await supabase
+      .from('tasks')
+      .delete()
+      .eq('id', id)
+      .eq('workspace_id', owner.workspace_id)
     if (error) throw new Error(error.message)
     revalidatePath('/tasks')
     redirect('/tasks')

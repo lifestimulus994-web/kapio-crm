@@ -28,6 +28,7 @@ export default async function LeadDetailPage({
     .from('leads')
     .select('*, assignee:members(id, full_name, email)')
     .eq('id', id)
+    .eq('workspace_id', me.workspace_id)
 
   if (!isOwner) {
     leadQuery = leadQuery.eq('assigned_to', me.id)
@@ -36,7 +37,11 @@ export default async function LeadDetailPage({
   const [leadRes, membersRes] = await Promise.all([
     leadQuery.single(),
     isOwner
-      ? supabase.from('members').select('id, full_name, email').order('full_name')
+      ? supabase
+          .from('members')
+          .select('id, full_name, email')
+          .eq('workspace_id', me.workspace_id)
+          .order('full_name')
       : Promise.resolve({ data: null, error: null }),
   ])
 
@@ -52,7 +57,11 @@ export default async function LeadDetailPage({
     const current = await requireMember()
     if (current.role !== 'owner') return
     const assignedTo = (formData.get('assigned_to') as string) || null
-    const { error } = await supabase.from('leads').update({ assigned_to: assignedTo }).eq('id', id)
+    const { error } = await supabase
+      .from('leads')
+      .update({ assigned_to: assignedTo })
+      .eq('id', id)
+      .eq('workspace_id', current.workspace_id)
     if (error) throw new Error(error.message)
     revalidatePath(`/leads/${id}`)
     revalidatePath('/leads')
@@ -60,9 +69,14 @@ export default async function LeadDetailPage({
 
   async function setStatus(formData: FormData) {
     'use server'
+    const current = await requireMember()
     const status = formData.get('status') as string
     if (!LEAD_STATUSES.includes(status as (typeof LEAD_STATUSES)[number])) return
-    const { error } = await supabase.from('leads').update({ status }).eq('id', id)
+    const { error } = await supabase
+      .from('leads')
+      .update({ status })
+      .eq('id', id)
+      .eq('workspace_id', current.workspace_id)
     if (error) throw new Error(error.message)
     revalidatePath(`/leads/${id}`)
     revalidatePath('/leads')

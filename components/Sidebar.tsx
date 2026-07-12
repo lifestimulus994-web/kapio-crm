@@ -9,7 +9,7 @@ import VoiceImport from '@/components/VoiceImport'
 import LogoutButton from '@/components/LogoutButton'
 
 const nav = [
-  { href: '/', label: 'Pipeline', Icon: KanbanSquare },
+  { href: '/dashboard', label: 'Pipeline', Icon: KanbanSquare },
   { href: '/organizations', label: 'Organizations', Icon: Building2 },
   { href: '/contacts', label: 'Contacts', Icon: Users },
   { href: '/tasks', label: 'Tasks', Icon: ListTodo },
@@ -84,8 +84,7 @@ export default function Sidebar({
         {/* Nav */}
         <nav className="flex-1 space-y-1 px-3 py-2">
           {items.map(({ href, label, Icon }) => {
-            const active =
-              href === '/' ? pathname === '/' : pathname.startsWith(href)
+            const active = pathname.startsWith(href)
             return (
               <Link
                 key={href}

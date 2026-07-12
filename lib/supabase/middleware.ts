@@ -27,17 +27,22 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
-  const isLoginPage = request.nextUrl.pathname.startsWith('/login')
+  // '/' is the public marketing page; /login and /signup are public auth
+  // forms. Everything else requires a session.
+  const publicPaths = new Set(['/', '/login', '/signup'])
+  const isPublicPath = publicPaths.has(request.nextUrl.pathname)
+  const isAuthPage =
+    request.nextUrl.pathname === '/login' || request.nextUrl.pathname === '/signup'
 
-  if (!user && !isLoginPage) {
+  if (!user && !isPublicPath) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     return NextResponse.redirect(url)
   }
 
-  if (user && isLoginPage) {
+  if (user && (isAuthPage || request.nextUrl.pathname === '/')) {
     const url = request.nextUrl.clone()
-    url.pathname = '/'
+    url.pathname = '/dashboard'
     return NextResponse.redirect(url)
   }
 
