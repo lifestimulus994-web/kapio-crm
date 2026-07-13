@@ -120,8 +120,15 @@ ${schedHintText}
 You can answer questions about the data above AND make changes using the tools.
 
 Guidelines:
-- Be concise and direct. Prefer short answers. Reply in the user's language
-  (Georgian if they write in Georgian).
+- Be concise and direct. Prefer short answers.
+- LANGUAGE — ALWAYS MATCH THE USER: reply in exactly the language the user's
+  LATEST message is written in, every single time, no exceptions. If they
+  write in Georgian, your ENTIRE reply must be in Georgian — not a mix, not
+  English with a Georgian phrase, not English because an earlier message in
+  this conversation was in English. Re-check the language of every new
+  message; users switch, and you must switch with them immediately. Tool
+  names, field names, and record data can stay as-is (e.g. company/contact
+  names), but every word you write yourself must be in their language.
 - All monetary values are in Georgian Lari (GEL).
 - Use the "Live CRM data" snapshot to answer lookups, counts, and lists. If a
   needed field isn't in the snapshot, call get_record rather than guessing or
@@ -356,7 +363,7 @@ Guidelines:
           role: 'user',
           parts: [
             {
-              text: 'You must reply now with something useful: summarize what you found or did, or ask one specific question naming the exact companies/contacts/deals/tasks you are unsure about. Do not say you did not understand.',
+              text: 'You must reply now with something useful, in the same language as the conversation: summarize what you found or did, or ask one specific question naming the exact companies/contacts/deals/tasks you are unsure about. Do not say you did not understand.',
             },
           ],
         },
@@ -364,8 +371,8 @@ Guidelines:
       reply =
         nudge.text ??
         (executed.length > 0
-          ? `Done: ${executed.map((e) => e.name).join(', ')}.`
-          : 'Tell me the company, contact, deal, or task name and I’ll look it up.')
+          ? `შესრულდა: ${executed.map((e) => e.name).join(', ')}.`
+          : 'მითხარი კომპანიის, კონტაქტის, გარიგების ან დავალების სახელი და მოვძებნი.')
     }
 
     return NextResponse.json({
@@ -374,12 +381,11 @@ Guidelines:
       ...(pending ? { pendingConfirmation: pending } : {}),
     })
   } catch (err) {
-    const raw = err instanceof Error ? err.message : 'Unexpected server error.'
+    const raw = err instanceof Error ? err.message : 'დაფიქსირდა მოულოდნელი შეცდომა სერვერზე.'
     if (/RESOURCE_EXHAUSTED|quota|\b429\b/i.test(raw)) {
       return NextResponse.json(
         {
-          error:
-            'The free-tier AI quota is used up for now. It resets after a while — or enable billing in Google AI Studio for higher limits.',
+          error: 'AI-ის ლიმიტი ამოიწურა. მალე განახლდება — ან ჩართე billing Google AI Studio-ში მეტი ლიმიტისთვის.',
         },
         { status: 429 }
       )
@@ -387,8 +393,7 @@ Guidelines:
     if (/503|UNAVAILABLE|overloaded|high demand/i.test(raw)) {
       return NextResponse.json(
         {
-          error:
-            'The AI model is busy right now (high demand). Please try again in a few seconds.',
+          error: 'AI მოდელი ამჟამად დატვირთულია. სცადე რამდენიმე წამში ხელახლა.',
         },
         { status: 503 }
       )

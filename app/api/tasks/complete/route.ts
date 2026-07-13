@@ -26,14 +26,14 @@ export async function POST(req: Request) {
   try {
     body = await req.json()
   } catch {
-    return NextResponse.json({ error: 'Invalid request body.' }, { status: 400 })
+    return NextResponse.json({ error: 'არასწორი მოთხოვნა.' }, { status: 400 })
   }
 
   const taskId = body.taskId
   const outcome = (body.outcome ?? '').trim()
   const mode = body.mode ?? 'done'
   if (!taskId) {
-    return NextResponse.json({ error: 'taskId is required.' }, { status: 400 })
+    return NextResponse.json({ error: 'taskId აუცილებელია.' }, { status: 400 })
   }
 
   // Load the task + its opportunity (needed to attach the comment/follow-up).
@@ -45,7 +45,7 @@ export async function POST(req: Request) {
   if (!scope.elevated) taskQuery = taskQuery.eq('assigned_to', me.id)
   const { data: task, error: taskErr } = await taskQuery.single()
   if (taskErr || !task) {
-    return NextResponse.json({ error: 'Task not found.' }, { status: 404 })
+    return NextResponse.json({ error: 'დავალება ვერ მოიძებნა.' }, { status: 404 })
   }
 
   // Always mark the task done.
@@ -68,7 +68,7 @@ export async function POST(req: Request) {
 
   // No outcome or no linked deal → nothing more to log.
   if (!outcome || !opp || mode === 'done') {
-    return NextResponse.json({ ok: true, summary: 'Task marked done.', actions })
+    return NextResponse.json({ ok: true, summary: 'დავალება მონიშნულია დასრულებულად.', actions })
   }
 
   // Manual: write the outcome straight onto the opportunity.
@@ -82,7 +82,7 @@ export async function POST(req: Request) {
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     return NextResponse.json({
       ok: true,
-      summary: 'Outcome logged on the opportunity.',
+      summary: 'შედეგი დაემატა გარიგებას.',
       actions: [{ name: 'add_opportunity_comment', result: { success: true } }],
     })
   }
@@ -90,7 +90,7 @@ export async function POST(req: Request) {
   // AI: let the agent log a clean comment + create a follow-up if implied.
   if (!process.env.GEMINI_API_KEY) {
     return NextResponse.json(
-      { error: 'GEMINI_API_KEY is not configured on the server.' },
+      { error: 'GEMINI_API_KEY არ არის კონფიგურირებული სერვერზე.' },
       { status: 500 }
     )
   }
@@ -101,7 +101,7 @@ export async function POST(req: Request) {
   if (!budget.allowed) {
     return NextResponse.json({
       ok: true,
-      summary: `Task marked done. ${budgetExceededMessage(budget)}`,
+      summary: `დავალება დასრულებულია. ${budgetExceededMessage(budget)}`,
       actions,
     })
   }
@@ -126,7 +126,9 @@ A salesperson just COMPLETED a task and reported how it actually went. Your job:
    called later, requested a proposal), call create_task to create that follow-up, linked to
    opportunity "${opp.title}", with a sensible due_date (convert "tomorrow"/"in 3 days" to an
    absolute YYYY-MM-DD relative to today). If no follow-up is needed, do not create one.
-Do not invent facts beyond the report. Reply with one short sentence describing what you logged.
+Do not invent facts beyond the report. LANGUAGE: write EVERYTHING — the comment AND your
+final reply — in exactly the same language as the salesperson's report below; if it's in
+Georgian, write entirely in Georgian. Reply with one short sentence describing what you logged.
 
 Completed task: "${task.title}"
 Salesperson's report: "${outcome}"
@@ -192,13 +194,13 @@ ${context}`
       response = await generate(contents, 'AUTO')
     }
 
-    const summary = response.text ?? 'Logged the outcome on the opportunity.'
+    const summary = response.text ?? 'შედეგი ჩაიწერა გარიგებაზე.'
     return NextResponse.json({ ok: true, summary, actions })
   } catch (err) {
-    const raw = err instanceof Error ? err.message : 'Unexpected server error.'
+    const raw = err instanceof Error ? err.message : 'დაფიქსირდა მოულოდნელი შეცდომა სერვერზე.'
     // The task is already done; report the AI failure but don't 500 the whole flow.
     return NextResponse.json(
-      { ok: true, summary: `Task marked done, but AI logging failed: ${raw}`, actions },
+      { ok: true, summary: `დავალება დასრულებულია, თუმცა AI ჩანაწერმა ვერ იმუშავა: ${raw}`, actions },
       { status: 200 }
     )
   } finally {

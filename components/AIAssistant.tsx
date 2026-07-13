@@ -17,9 +17,9 @@ type Message = {
 }
 
 const suggestions = [
-  'What deals are in Negotiation?',
-  'Total active pipeline value?',
-  'Which tasks are overdue?',
+  'რომელი გარიგებებია მოლაპარაკების ეტაპზე?',
+  'რა არის მთლიანი აქტიური პაიფლაინის ღირებულება?',
+  'რომელი დავალებებია ვადაგადაცილებული?',
 ]
 
 export default function AIAssistant() {
@@ -71,7 +71,7 @@ export default function AIAssistant() {
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true })
     } catch {
-      setVoiceError('Microphone access was blocked. Allow it in your browser.')
+      setVoiceError('მიკროფონზე წვდომა დაბლოკილია. დაუშვი ბრაუზერის პარამეტრებში.')
       return
     }
 
@@ -94,13 +94,13 @@ export default function AIAssistant() {
         const res = await fetch('/api/transcribe', { method: 'POST', body: form })
         const data = await res.json()
         if (!res.ok) {
-          setVoiceError(data.error ?? 'Could not transcribe the audio.')
+          setVoiceError(data.error ?? 'აუდიოს გაშიფვრა ვერ მოხერხდა.')
         } else if (data.text) {
           // Append to whatever is already typed.
           setInput((prev) => (prev ? `${prev} ${data.text}` : data.text))
         }
       } catch {
-        setVoiceError('Network error while transcribing.')
+        setVoiceError('ქსელის შეცდომა გაშიფვრისას.')
       } finally {
         setTranscribing(false)
       }
@@ -127,7 +127,7 @@ export default function AIAssistant() {
       const data = await res.json()
       const reply = res.ok
         ? data.reply
-        : `⚠️ ${data.error ?? 'Something went wrong.'}`
+        : `⚠️ ${data.error ?? 'რაღაც შეცდომა მოხდა.'}`
       setMessages((m) => [
         ...m,
         {
@@ -143,7 +143,7 @@ export default function AIAssistant() {
     } catch {
       setMessages((m) => [
         ...m,
-        { role: 'model', text: '⚠️ Network error. Is the server running?' },
+        { role: 'model', text: '⚠️ ქსელის შეცდომა. სერვერი მუშაობს?' },
       ])
     } finally {
       setLoading(false)
@@ -177,14 +177,14 @@ export default function AIAssistant() {
         ...m.map((x, i) => (i === index ? { ...x, resolved: 'confirmed' as const } : x)),
         {
           role: 'model',
-          text: res.ok ? data.reply : `⚠️ ${data.error ?? 'Something went wrong.'}`,
+          text: res.ok ? data.reply : `⚠️ ${data.error ?? 'რაღაც შეცდომა მოხდა.'}`,
         },
       ])
       if (res.ok) router.refresh()
     } catch {
       setMessages((m) => [
         ...m,
-        { role: 'model', text: '⚠️ Network error. Is the server running?' },
+        { role: 'model', text: '⚠️ ქსელის შეცდომა. სერვერი მუშაობს?' },
       ])
     } finally {
       setLoading(false)
@@ -200,7 +200,7 @@ export default function AIAssistant() {
           className="fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-3 shadow-lg shadow-emerald-900/40 transition-colors"
         >
           <Sparkles size={18} />
-          <span className="text-sm font-medium">Ask AI</span>
+          <span className="text-sm font-medium">კითხე AI-ს</span>
         </button>
       )}
 
@@ -215,9 +215,9 @@ export default function AIAssistant() {
               </div>
               <div>
                 <p className="text-sm font-semibold text-slate-100">
-                  AI Assistant
+                  AI ასისტენტი
                 </p>
-                <p className="text-[11px] text-slate-500">Powered by Gemini</p>
+                <p className="text-[11px] text-slate-500">Powered by Kapio</p>
               </div>
             </div>
             <button
@@ -236,8 +236,8 @@ export default function AIAssistant() {
             {messages.length === 0 && (
               <div className="space-y-3">
                 <p className="text-sm text-slate-400">
-                  Ask me anything about your CRM — deals, contacts, companies,
-                  or tasks.
+                  მკითხე ნებისმიერი რამ შენი CRM-ის შესახებ — გარიგებები, კონტაქტები, კომპანიები
+                  ან დავალებები.
                 </p>
                 <div className="space-y-1.5">
                   {suggestions.map((s) => (
@@ -277,19 +277,19 @@ export default function AIAssistant() {
                       disabled={loading}
                       className="rounded-lg bg-red-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-red-500 disabled:opacity-40"
                     >
-                      Confirm
+                      დადასტურება
                     </button>
                     <button
                       onClick={() => resolveConfirmation(i, false)}
                       disabled={loading}
                       className="rounded-lg bg-slate-700 px-2.5 py-1 text-xs font-medium text-slate-200 transition-colors hover:bg-slate-600 disabled:opacity-40"
                     >
-                      Cancel
+                      გაუქმება
                     </button>
                   </div>
                 )}
                 {m.confirmation && m.resolved === 'cancelled' && (
-                  <span className="mt-1 text-[11px] text-slate-500">Cancelled.</span>
+                  <span className="mt-1 text-[11px] text-slate-500">გაუქმებულია.</span>
                 )}
               </div>
             ))}
@@ -327,10 +327,10 @@ export default function AIAssistant() {
                 disabled={transcribing}
                 title={
                   transcribing
-                    ? 'Transcribing…'
+                    ? 'გაშიფვრა…'
                     : listening
-                      ? 'Stop & transcribe'
-                      : 'Record voice'
+                      ? 'შეჩერება და გაშიფვრა'
+                      : 'ხმის ჩაწერა'
                 }
                 className={`flex h-9 w-9 flex-none items-center justify-center rounded-lg transition-colors disabled:opacity-60 ${
                   listening
@@ -350,10 +350,10 @@ export default function AIAssistant() {
               onChange={(e) => setInput(e.target.value)}
               placeholder={
                 listening
-                  ? 'Recording… click mic to stop'
+                  ? 'ჩაწერა… დააჭირე მიკროფონს შესაჩერებლად'
                   : transcribing
-                    ? 'Transcribing…'
-                    : 'Ask about your CRM…'
+                    ? 'გაშიფვრა…'
+                    : 'იკითხე შენი CRM-ის შესახებ…'
               }
               className="flex-1 rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/70"
             />

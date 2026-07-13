@@ -53,7 +53,7 @@ export async function POST(req: Request) {
 
   if (!process.env.GEMINI_API_KEY) {
     return NextResponse.json(
-      { error: 'GEMINI_API_KEY is not configured on the server.' },
+      { error: 'GEMINI_API_KEY არ არის კონფიგურირებული სერვერზე.' },
       { status: 500 }
     )
   }
@@ -71,20 +71,20 @@ export async function POST(req: Request) {
     if (f instanceof File) file = f
   } catch {
     return NextResponse.json(
-      { error: 'Could not read the uploaded file.' },
+      { error: 'ატვირთული ფაილის წაკითხვა ვერ მოხერხდა.' },
       { status: 400 }
     )
   }
 
   if (!file) {
     return NextResponse.json(
-      { error: 'No audio file was provided.' },
+      { error: 'აუდიო ფაილი არ არის მიწოდებული.' },
       { status: 400 }
     )
   }
   if (file.size > MAX_BYTES) {
     return NextResponse.json(
-      { error: 'Audio file is too large (max 15 MB). Use a shorter clip.' },
+      { error: 'აუდიო ფაილი ზედმეტად დიდია (მაქს. 15 MB). გამოიყენე უფრო მოკლე ჩანაწერი.' },
       { status: 413 }
     )
   }
@@ -190,8 +190,10 @@ Do the following, in order:
    must trace back to something actually said in the memo.
 
 Your tool calls are PROPOSALS — the user will review and confirm them before anything
-is saved, so it is fine to propose records. Reply in the SAME language as the memo with:
-first the exact transcription, then a short bullet list of what you propose to add or reuse.
+is saved, so it is fine to propose records. LANGUAGE: your summary/bullet list must be
+in exactly the same language as the memo itself — if the memo is in Georgian, write
+ENTIRELY in Georgian, no exceptions. Reply with: first the exact transcription, then a
+short bullet list of what you propose to add or reuse.
 
 Current CRM data (JSON):
 ${context}`
@@ -307,7 +309,7 @@ ${context}`
     }
 
     const summary =
-      response.text ?? 'Processed the recording, but produced no summary.'
+      response.text ?? 'ჩანაწერი დამუშავდა, მაგრამ შეჯამება ვერ მომზადდა.'
 
     // Gemini is unreliable at converting a spoken time expression (e.g. "6
     // საათზე საღამოს") into a correct 24h start_at — same gap the text chat
@@ -329,12 +331,11 @@ ${context}`
     // Return the proposal for the user to review/edit before anything is saved.
     return NextResponse.json({ mode: 'plan', summary, plan })
   } catch (err) {
-    const raw = err instanceof Error ? err.message : 'Unexpected server error.'
+    const raw = err instanceof Error ? err.message : 'დაფიქსირდა მოულოდნელი შეცდომა სერვერზე.'
     if (/RESOURCE_EXHAUSTED|quota|\b429\b/i.test(raw)) {
       return NextResponse.json(
         {
-          error:
-            'The free-tier AI quota is used up for now. It resets after a while — or enable billing in Google AI Studio for higher limits.',
+          error: 'AI-ის ლიმიტი ამოიწურა. მალე განახლდება — ან ჩართე billing Google AI Studio-ში მეტი ლიმიტისთვის.',
         },
         { status: 429 }
       )
@@ -342,8 +343,7 @@ ${context}`
     if (/503|UNAVAILABLE|overloaded|high demand/i.test(raw)) {
       return NextResponse.json(
         {
-          error:
-            'The AI model is busy right now (high demand). Please try again in a few seconds.',
+          error: 'AI მოდელი ამჟამად დატვირთულია. სცადე რამდენიმე წამში ხელახლა.',
         },
         { status: 503 }
       )
@@ -382,12 +382,12 @@ async function commitPlan(req: Request, scope: AiScope) {
     }
     if (Array.isArray(body.plan)) plan = body.plan
   } catch {
-    return NextResponse.json({ error: 'Invalid request body.' }, { status: 400 })
+    return NextResponse.json({ error: 'არასწორი მოთხოვნა.' }, { status: 400 })
   }
 
   if (plan.length === 0) {
     return NextResponse.json(
-      { error: 'There is nothing to save.' },
+      { error: 'შესანახი არაფერია.' },
       { status: 400 }
     )
   }

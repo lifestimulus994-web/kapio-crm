@@ -18,7 +18,7 @@ export async function POST(req: Request) {
 
   if (!process.env.GEMINI_API_KEY) {
     return NextResponse.json(
-      { error: 'GEMINI_API_KEY is not configured on the server.' },
+      { error: 'GEMINI_API_KEY არ არის კონფიგურირებული სერვერზე.' },
       { status: 500 }
     )
   }
@@ -35,20 +35,20 @@ export async function POST(req: Request) {
     if (f instanceof File) file = f
   } catch {
     return NextResponse.json(
-      { error: 'Could not read the uploaded audio.' },
+      { error: 'ატვირთული აუდიოს წაკითხვა ვერ მოხერხდა.' },
       { status: 400 }
     )
   }
 
   if (!file) {
     return NextResponse.json(
-      { error: 'No audio was provided.' },
+      { error: 'აუდიო არ არის მიწოდებული.' },
       { status: 400 }
     )
   }
   if (file.size > MAX_BYTES) {
     return NextResponse.json(
-      { error: 'Audio is too large (max 15 MB).' },
+      { error: 'აუდიო ზედმეტად დიდია (მაქს. 15 MB).' },
       { status: 413 }
     )
   }
@@ -96,16 +96,16 @@ export async function POST(req: Request) {
     const text = (response?.text ?? '').trim()
     return NextResponse.json({ text })
   } catch (err) {
-    const raw = err instanceof Error ? err.message : 'Unexpected server error.'
+    const raw = err instanceof Error ? err.message : 'დაფიქსირდა მოულოდნელი შეცდომა სერვერზე.'
     if (/RESOURCE_EXHAUSTED|quota|\b429\b/i.test(raw)) {
       return NextResponse.json(
-        { error: 'The AI quota is used up for now. Try again later.' },
+        { error: 'AI-ის ლიმიტი ამჟამად ამოწურულია. სცადე მოგვიანებით.' },
         { status: 429 }
       )
     }
     if (/503|UNAVAILABLE|overloaded|high demand/i.test(raw)) {
       return NextResponse.json(
-        { error: 'The AI model is busy right now. Try again in a few seconds.' },
+        { error: 'AI მოდელი ამჟამად დატვირთულია. სცადე რამდენიმე წამში ხელახლა.' },
         { status: 503 }
       )
     }
