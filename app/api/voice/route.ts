@@ -162,8 +162,10 @@ Do the following, in order:
      fill "legal_name" and "identification_code" from the results. WEB data —
      unverified: fill email, phone, website, and address. In the org "notes"
      add: "⚠️ Email/phone/website/address auto-found on the web — VERIFY." (skip
-     this note if only registry data was found). If the lookup returns
-     nothing, create it with the name and details from the memo.
+     this note if only registry data was found). In your summary, explicitly
+     list any field the tool's "note" reported as not found — don't silently
+     drop it, say plainly it couldn't be found publicly. If the lookup returns
+     nothing at all, create it with the name and details from the memo.
    - KEEP TASK TITLES SHORT (e.g. "Call with Nino Beridze (TBC Bank)"), never
      the full memo sentence — background goes in "description" and in the
      comments described above.

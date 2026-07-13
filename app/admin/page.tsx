@@ -8,10 +8,13 @@ import { formatDateTime } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
 
-type OwnerRow = {
+type MemberRow = {
   id: string
   email: string
   full_name: string | null
+  role: string
+  status: 'pending' | 'approved' | 'rejected'
+  invited_by: string | null
   created_at: string
   workspace: {
     id: string
@@ -40,6 +43,12 @@ const statusLabel: Record<string, string> = {
   rejected: 'უარყოფილი',
 }
 
+const roleLabel: Record<string, string> = {
+  owner: 'Owner',
+  manager: 'Manager',
+  member: 'Member',
+}
+
 export default async function AdminPage() {
   const me = await getCurrentMember()
   if (!me) redirect('/login')
@@ -51,54 +60,82 @@ export default async function AdminPage() {
   // DB row an app bug could tamper with.
   const { data } = await admin
     .from('members')
-    .select('id, email, full_name, created_at, workspace:workspaces(id, name, plan, status, created_at)')
-    .eq('role', 'owner')
+    .select(
+      'id, email, full_name, role, status, invited_by, created_at, workspace:workspaces(id, name, plan, status, created_at)'
+    )
     .order('created_at', { ascending: false })
 
-  const owners = (data ?? []) as unknown as OwnerRow[]
-  const pending = owners.filter((o) => o.workspace?.status === 'pending')
-  const rest = owners.filter((o) => o.workspace?.status !== 'pending')
+  const members = (data ?? []) as unknown as MemberRow[]
+  const byId = new Map(members.map((m) => [m.id, m]))
 
-  async function setStatus(formData: FormData) {
+  const pending = members.filter((m) => m.status === 'pending' || m.workspace?.status === 'pending')
+  const rest = members.filter((m) => m.status !== 'pending' && m.workspace?.status !== 'pending')
+
+  async function setMemberStatus(formData: FormData) {
     'use server'
     const current = await getCurrentMember()
     if (!current || !isSuperAdmin(current.email)) return
+    const memberId = formData.get('member_id') as string
     const workspaceId = formData.get('workspace_id') as string
     const status = formData.get('status') as string
-    if (!workspaceId || !['approved', 'rejected', 'pending'].includes(status)) return
-    const { error } = await admin.from('workspaces').update({ status }).eq('id', workspaceId)
+    if (!memberId || !['approved', 'rejected', 'pending'].includes(status)) return
+
+    const { error } = await admin.from('members').update({ status }).eq('id', memberId)
     if (error) throw new Error(error.message)
+
+    // Approving an owner's row also approves their workspace in the same
+    // click — a brand-new signup is otherwise gated twice for no reason,
+    // since nobody else can be in that workspace yet anyway.
+    if (status === 'approved' && workspaceId) {
+      await admin
+        .from('workspaces')
+        .update({ status: 'approved' })
+        .eq('id', workspaceId)
+        .eq('status', 'pending')
+    }
     revalidatePath('/admin')
   }
 
-  function Row({ owner }: { owner: OwnerRow }) {
-    const ws = owner.workspace
-    if (!ws) return null
+  function Row({ m }: { m: MemberRow }) {
+    const ws = m.workspace
+    const inviter = m.invited_by ? byId.get(m.invited_by) : null
+    const effectiveStatus: 'pending' | 'approved' | 'rejected' =
+      ws?.status === 'pending' ? 'pending' : m.status
     return (
       <div className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-900/40 p-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <p className="truncate text-sm font-semibold text-slate-100">{ws.name}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="truncate text-sm font-semibold text-slate-100">
+              {m.full_name || m.email}
+            </p>
             <span
-              className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${statusChip[ws.status] ?? ''}`}
+              className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${statusChip[effectiveStatus] ?? ''}`}
             >
-              {statusLabel[ws.status] ?? ws.status}
+              {statusLabel[effectiveStatus] ?? effectiveStatus}
             </span>
             <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-slate-400">
-              {planLabel[ws.plan] ?? ws.plan}
+              {roleLabel[m.role] ?? m.role}
             </span>
+            {ws && (
+              <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-slate-400">
+                {planLabel[ws.plan] ?? ws.plan}
+              </span>
+            )}
           </div>
           <p className="mt-1 text-xs text-slate-500">
-            {owner.full_name || '—'} · {owner.email}
+            {m.email} {ws && <>· {ws.name}</>}
           </p>
           <p className="mt-0.5 text-[11px] text-slate-600">
-            რეგისტრირდა {formatDateTime(ws.created_at)}
+            {m.role === 'owner' ? 'თავად დარეგისტრირდა' : inviter ? `დაამატა ${inviter.full_name || inviter.email}` : 'ვინ დაამატა უცნობია'}
+            {' · '}
+            {formatDateTime(m.created_at)}
           </p>
         </div>
         <div className="flex flex-none items-center gap-2">
-          {ws.status !== 'approved' && (
-            <form action={setStatus}>
-              <input type="hidden" name="workspace_id" value={ws.id} />
+          {effectiveStatus !== 'approved' && (
+            <form action={setMemberStatus}>
+              <input type="hidden" name="member_id" value={m.id} />
+              <input type="hidden" name="workspace_id" value={ws?.id ?? ''} />
               <input type="hidden" name="status" value="approved" />
               <button
                 type="submit"
@@ -109,9 +146,10 @@ export default async function AdminPage() {
               </button>
             </form>
           )}
-          {ws.status !== 'rejected' && (
-            <form action={setStatus}>
-              <input type="hidden" name="workspace_id" value={ws.id} />
+          {effectiveStatus !== 'rejected' && (
+            <form action={setMemberStatus}>
+              <input type="hidden" name="member_id" value={m.id} />
+              <input type="hidden" name="workspace_id" value={ws?.id ?? ''} />
               <input type="hidden" name="status" value="rejected" />
               <button
                 type="submit"
@@ -141,16 +179,16 @@ export default async function AdminPage() {
 
         <section className="mb-8">
           <h2 className="mb-3 text-sm font-medium text-slate-300">
-            განსახილველი რეგისტრაციები{' '}
+            განსახილველი (workspace-ები და წევრები){' '}
             <span className="font-normal text-slate-600">({pending.length})</span>
           </h2>
           <div className="space-y-2.5">
-            {pending.map((o) => (
-              <Row key={o.id} owner={o} />
+            {pending.map((m) => (
+              <Row key={m.id} m={m} />
             ))}
             {pending.length === 0 && (
               <p className="rounded-xl border border-slate-800 bg-slate-900/30 px-4 py-6 text-center text-sm text-slate-600">
-                განსახილველი რეგისტრაცია არ არის.
+                განსახილველი არაფერია.
               </p>
             )}
           </div>
@@ -158,11 +196,11 @@ export default async function AdminPage() {
 
         <section>
           <h2 className="mb-3 text-sm font-medium text-slate-300">
-            ყველა workspace <span className="font-normal text-slate-600">({rest.length})</span>
+            ყველა მომხმარებელი <span className="font-normal text-slate-600">({rest.length})</span>
           </h2>
           <div className="space-y-2.5">
-            {rest.map((o) => (
-              <Row key={o.id} owner={o} />
+            {rest.map((m) => (
+              <Row key={m.id} m={m} />
             ))}
             {rest.length === 0 && (
               <p className="rounded-xl border border-slate-800 bg-slate-900/30 px-4 py-6 text-center text-sm text-slate-600">

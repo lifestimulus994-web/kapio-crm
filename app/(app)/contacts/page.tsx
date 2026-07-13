@@ -3,6 +3,7 @@ import { requireMember, hasElevatedAccess } from '@/lib/auth'
 import type { Contact } from '@/types'
 import { fullName } from '@/lib/utils'
 import RecordsTable, { type TableRow } from '@/components/RecordsTable'
+import { memberColor } from '@/lib/member-color'
 
 export const dynamic = 'force-dynamic'
 
@@ -51,7 +52,12 @@ export default async function ContactsPage() {
         href: c.email ? `mailto:${c.email}` : undefined,
       },
       ...(elevated
-        ? [{ value: c.assignee?.full_name || c.assignee?.email || 'Unassigned' }]
+        ? [
+            {
+              value: c.assignee?.full_name || c.assignee?.email || 'Unassigned',
+              dotColor: memberColor(c.assigned_to)?.dot,
+            },
+          ]
         : []),
     ],
     searchText: [

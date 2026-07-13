@@ -11,9 +11,9 @@ export const dynamic = 'force-dynamic'
 export default async function PendingApprovalPage() {
   const me = await getCurrentMember()
   if (!me) redirect('/login')
-  if (me.workspace_status === 'approved') redirect('/dashboard')
+  if (me.workspace_status === 'approved' && me.status === 'approved') redirect('/dashboard')
 
-  const rejected = me.workspace_status === 'rejected'
+  const rejected = me.workspace_status === 'rejected' || me.status === 'rejected'
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-950 px-4">

@@ -43,6 +43,7 @@ export default function TeamManager({
     setPassword('')
     setFullName('')
     setRole('member')
+    if (data.note) alert(data.note)
     router.refresh()
   }
 
@@ -74,6 +75,17 @@ export default function TeamManager({
               <div className="text-xs text-slate-500">{m.email}</div>
             </div>
             <div className="flex items-center gap-3">
+              {m.status !== 'approved' && (
+                <span
+                  className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                    m.status === 'rejected'
+                      ? 'bg-red-950/40 text-red-400'
+                      : 'bg-amber-950/40 text-amber-400'
+                  }`}
+                >
+                  {m.status === 'rejected' ? 'უარყოფილი' : 'ადმინის დადასტურების მოლოდინში'}
+                </span>
+              )}
               <span
                 className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
                   m.role === 'owner'

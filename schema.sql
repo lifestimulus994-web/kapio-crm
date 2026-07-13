@@ -69,6 +69,16 @@ create table if not exists public.members (
 alter table public.members drop constraint if exists members_role_check;
 alter table public.members add constraint members_role_check
   check (role in ('owner', 'manager', 'member'));
+
+-- Approval gate at the PERSON level, on top of the workspace-level one above:
+-- every new member — a self-signup owner AND every teammate an owner/manager
+-- invites afterward — starts 'pending' and is blocked until the super-admin
+-- approves them individually in /admin, which also records who invited them.
+alter table public.members add column if not exists status text not null default 'pending';
+alter table public.members drop constraint if exists members_status_check;
+alter table public.members add constraint members_status_check
+  check (status in ('pending', 'approved', 'rejected'));
+alter table public.members add column if not exists invited_by uuid references public.members(id);
 -- Nullable on purpose: existing pre-multi-tenant rows have none yet. Backfill
 -- (section 8) before ever relying on this being non-null.
 alter table public.members add column if not exists workspace_id uuid references public.workspaces(id);
@@ -324,10 +334,15 @@ grant all on all tables in schema public to anon, authenticated, service_role;
 --   - Owner-invited teammate (app/api/team/route.ts, admin.auth.admin.createUser):
 --     that route passes user_metadata.invited_workspace_id = the inviting
 --     owner's workspace_id (plus invited_role = 'manager'|'member', default
---     'member' — an invite can never grant 'owner'), so this trigger joins
---     them to THAT workspace instead of minting a new one. The route itself
---     does NOT insert into members separately — this trigger is the only
---     writer, so there's no duplicate-key race between the two.
+--     'member' — an invite can never grant 'owner' — and invited_by = the
+--     inviter's own member id, for the audit trail in /admin), so this
+--     trigger joins them to THAT workspace instead of minting a new one. The
+--     route itself does NOT insert into members separately — this trigger is
+--     the only writer, so there's no duplicate-key race between the two.
+--   Every new member row — either path — starts status='pending': a fresh
+--   signup needs the workspace itself approved (blocks everyone in it); an
+--   invited teammate needs their OWN row approved even though the workspace
+--   is already live. See lib/auth.ts requireMember() for the gate.
 -- ============================================================================
 
 create or replace function public.handle_new_user()
@@ -336,6 +351,7 @@ declare
   new_workspace_id uuid;
   invited_id uuid;
   invited_role text;
+  inviter_id uuid;
   chosen_plan text;
 begin
   invited_id := (new.raw_user_meta_data->>'invited_workspace_id')::uuid;
@@ -345,8 +361,9 @@ begin
       when new.raw_user_meta_data->>'invited_role' = 'manager' then 'manager'
       else 'member'
     end;
-    insert into public.members (id, workspace_id, email, full_name, role)
-    values (new.id, invited_id, new.email, new.raw_user_meta_data->>'full_name', invited_role)
+    inviter_id := (new.raw_user_meta_data->>'invited_by')::uuid;
+    insert into public.members (id, workspace_id, email, full_name, role, status, invited_by)
+    values (new.id, invited_id, new.email, new.raw_user_meta_data->>'full_name', invited_role, 'pending', inviter_id)
     on conflict (id) do nothing;
     return new;
   end if;
@@ -361,8 +378,8 @@ begin
   values (coalesce(new.raw_user_meta_data->>'business_name', 'My Business'), chosen_plan)
   returning id into new_workspace_id;
 
-  insert into public.members (id, workspace_id, email, full_name, role)
-  values (new.id, new_workspace_id, new.email, new.raw_user_meta_data->>'full_name', 'owner')
+  insert into public.members (id, workspace_id, email, full_name, role, status)
+  values (new.id, new_workspace_id, new.email, new.raw_user_meta_data->>'full_name', 'owner', 'pending')
   on conflict (id) do nothing;
 
   return new;
@@ -419,10 +436,12 @@ create trigger on_auth_user_created
 
 -- ---------------------------------------------------------------------------
 -- ONE-TIME MANUAL STEP for the approval gate: run this ONCE, right after
--- adding workspaces.status above, and NEVER again (unlike the rest of this
--- file, this is NOT safe to re-run — running it a second time would
--- auto-approve every real pending signup that had shown up since). Marks
--- every workspace that already existed before the approval gate shipped as
--- 'approved', so nobody currently using the app gets locked out.
+-- adding workspaces.status/members.status above, and NEVER again (unlike the
+-- rest of this file, this is NOT safe to re-run — running it a second time
+-- would auto-approve every real pending signup/invite that had shown up
+-- since). Marks every workspace AND member that already existed before the
+-- approval gate shipped as 'approved', so nobody currently using the app
+-- gets locked out.
 -- ---------------------------------------------------------------------------
 -- update public.workspaces set status = 'approved' where status = 'pending';
+-- update public.members    set status = 'approved' where status = 'pending';

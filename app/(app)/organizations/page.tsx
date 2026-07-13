@@ -2,6 +2,7 @@ import { supabase } from '@/lib/supabase'
 import { requireMember, hasElevatedAccess } from '@/lib/auth'
 import type { Organization } from '@/types'
 import RecordsTable, { type TableRow } from '@/components/RecordsTable'
+import { memberColor } from '@/lib/member-color'
 
 export const dynamic = 'force-dynamic'
 
@@ -57,7 +58,12 @@ export default async function OrganizationsPage() {
           external: true,
         },
         ...(elevated
-          ? [{ value: org.assignee?.full_name || org.assignee?.email || 'Unassigned' }]
+          ? [
+              {
+                value: org.assignee?.full_name || org.assignee?.email || 'Unassigned',
+                dotColor: memberColor(org.assigned_to)?.dot,
+              },
+            ]
           : []),
       ],
       searchText: [

@@ -7,6 +7,7 @@ import { Plus, Calendar, User, Briefcase, CalendarDays, ListTodo } from 'lucide-
 import { formatDate, isOverdue } from '@/lib/utils'
 import { priorityChip, statusMeta, nextStatus } from '@/lib/task-ui'
 import StatusToggleButton from '@/components/StatusToggleButton'
+import { memberColor } from '@/lib/member-color'
 
 export const dynamic = 'force-dynamic'
 
@@ -14,16 +15,17 @@ const groups: TaskStatus[] = ['todo', 'in_progress', 'done']
 
 export default async function TasksPage() {
   const me = await requireMember()
+  const elevated = hasElevatedAccess(me)
   let query = supabase
     .from('tasks')
     .select(
-      '*, organization:organizations(id, name), contact:contacts(id, first_name, last_name), opportunity:opportunities(id, title)'
+      '*, organization:organizations(id, name), contact:contacts(id, first_name, last_name), opportunity:opportunities(id, title), assignee:members(id, full_name, email)'
     )
     .eq('workspace_id', me.workspace_id)
     .eq('archived', false)
     .order('due_date', { ascending: true, nullsFirst: false })
 
-  if (!hasElevatedAccess(me)) {
+  if (!elevated) {
     query = query.eq('assigned_to', me.id)
   }
 
@@ -155,6 +157,14 @@ export default async function TasksPage() {
                               <span className="inline-flex items-center gap-1 text-xs text-slate-500">
                                 <User size={11} />
                                 {task.owner}
+                              </span>
+                            )}
+                            {elevated && (
+                              <span className="inline-flex items-center gap-1 text-xs text-slate-500">
+                                <span
+                                  className={`h-1.5 w-1.5 rounded-full ${memberColor(task.assigned_to)?.dot ?? 'bg-slate-600'}`}
+                                />
+                                {task.assignee?.full_name || task.assignee?.email || 'Unassigned'}
                               </span>
                             )}
                           </div>

@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { formatDate, isOverdue, fullName } from '@/lib/utils'
 import { priorityChip, statusMeta, nextStatus } from '@/lib/task-ui'
+import { memberColor } from '@/lib/member-color'
 import CommentThread from '@/components/CommentThread'
 
 export const dynamic = 'force-dynamic'
@@ -322,6 +323,9 @@ export default async function TaskDetailPage({
               <span className="inline-flex items-center gap-2 mb-1.5 text-xs text-slate-500">
                 <Users size={13} />
                 Assigned to
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${memberColor(task.assigned_to)?.dot ?? 'bg-slate-600'}`}
+                />
               </span>
               <div className="flex gap-2">
                 <select

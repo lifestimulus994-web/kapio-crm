@@ -5,6 +5,7 @@ import { requireMember, hasElevatedAccess } from '@/lib/auth'
 import type { Contact, Opportunity, Organization, Task, ContactComment } from '@/types'
 import { ChevronLeft, Mail, Phone, Briefcase, Building2, Pencil, Users } from 'lucide-react'
 import { formatCurrency, formatDate, fullName } from '@/lib/utils'
+import { memberColor } from '@/lib/member-color'
 import CommentThread from '@/components/CommentThread'
 
 export const dynamic = 'force-dynamic'
@@ -238,6 +239,9 @@ export default async function ContactDetailPage({
             <div className="flex items-center gap-1.5 mb-1.5">
               <Users size={12} className="text-slate-600" />
               <span className="text-xs text-slate-500">Assigned to</span>
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${memberColor(contact.assigned_to)?.dot ?? 'bg-slate-600'}`}
+              />
             </div>
             <select
               name="assigned_to"

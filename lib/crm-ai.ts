@@ -169,12 +169,17 @@ async function groundCompanyWithGemini(
   if (!name?.trim() || !process.env.GEMINI_API_KEY) return empty
 
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
-  const prompt = `Identify this company and find its OFFICIAL, PUBLICLY-LISTED details.
+  const prompt = `Identify this company and find EVERY ONE of its OFFICIAL, PUBLICLY-LISTED
+details below. Be exhaustive, not a single search: try the company's official
+website AND its contact/about page, its Google Maps / Google Business listing,
+its Facebook or Instagram business page, LinkedIn company page, and (if it's a
+Georgian company) local business directories — before deciding a field truly
+cannot be found. A real business almost always has a phone and address listed
+somewhere public; do not give up after one search attempt.
 The name may be MISHEARD or misspelled (it often comes from voice transcription),
 possibly split into pieces. Figure out the real company it refers to.
 Heard name: "${name}"${hint ? `\nExtra context: ${hint}` : ''}
 
-Look at the company's official website / contact page / business listings.
 Return ONLY a JSON object, no prose, in this exact shape:
 {"official_name": "", "email": "", "phone": "", "website": "", "address": ""}
 - "official_name": the correct, properly-spelled company name (fix the misheard
@@ -183,8 +188,10 @@ Return ONLY a JSON object, no prose, in this exact shape:
 - "email": a general/public contact email (info@, contact@, sales@).
 - "phone": the public business phone number, with country code if shown.
 - "address": the public business address / location (city and street if listed).
-Use an empty string for any field you cannot confidently find from public sources.
-Do NOT guess or fabricate. Never return passwords or private credentials.`
+Use an empty string ONLY for a field that genuinely does not appear anywhere in
+public sources after trying multiple searches — not just the first one that
+turned up nothing. Do NOT guess or fabricate. Never return passwords or
+private credentials.`
 
   // Retry on transient 503 overloads (otherwise a temporary spike silently
   // looks like "nothing found").
@@ -1012,13 +1019,25 @@ async function runToolInner(
       found.address ||
       found.identification_code ||
       found.legal_name
+    const missing = (
+      [
+        ['email', found.email],
+        ['phone', found.phone],
+        ['website', found.website],
+        ['address', found.address],
+        ['identification_code', found.identification_code],
+        ['legal_name', found.legal_name],
+      ] as const
+    )
+      .filter(([, v]) => !v)
+      .map(([k]) => k)
     return {
       success: true,
       found,
       verified: false,
       note: anything
-        ? "Two kinds of data here. From Georgia's official business registry (companyinfo.ge) — TRUSTED, no verification needed: legal_name, identification_code, registry_address. From general web search — best-effort, must be flagged unverified: official_name (display name), email, phone, website, address. Use official_name for the org's \"name\" field and legal_name for its \"legal_name\" field."
-        : 'Nothing reliable found for this company.',
+        ? `Two kinds of data here. From Georgia's official business registry (companyinfo.ge) — TRUSTED, no verification needed: legal_name, identification_code, registry_address. From general web search — best-effort, must be flagged unverified: official_name (display name), email, phone, website, address. Use official_name for the org's "name" field and legal_name for its "legal_name" field.${missing.length ? ` These fields were searched for but genuinely could not be found publicly: ${missing.join(', ')} — mention in your reply that these specifically were not found, don't just stay silent about them.` : ' All fields were found.'}`
+        : 'Nothing reliable found for this company after an exhaustive search — mention in your reply that none of it could be found publicly.',
     }
   }
 

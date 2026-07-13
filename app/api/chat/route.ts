@@ -238,9 +238,11 @@ Guidelines:
   auto-found on the web on ${today} — VERIFY." (omit this note entirely if
   only registry data — legal_name/identification_code — was found and no web
   data). In your reply, clearly separate what came from the official registry
-  (trusted) vs. the web (unverified), and show source link(s) for the web
-  data if any. If nothing reliable was found, create the company with the
-  details the user gave and say the lookup found nothing.
+  (trusted) vs. the web (unverified), show source link(s) for the web data if
+  any, AND explicitly list any field the tool reported as not found (its
+  "note" says which ones) — don't silently omit a missing field, say plainly
+  it couldn't be found publicly. If nothing reliable was found at all, create
+  the company with the details the user gave and say the lookup found nothing.
 - Never search for or store passwords or private credentials — those are not
   publicly available and must never be guessed.
 - After a tool runs, briefly confirm what changed. Never claim you changed

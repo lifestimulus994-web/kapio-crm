@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase'
 import { requireMember, hasElevatedAccess } from '@/lib/auth'
 import { STAGES, type Opportunity, type Stage } from '@/types'
 import { formatCurrency } from '@/lib/utils'
+import { memberColor } from '@/lib/member-color'
 
 export const dynamic = 'force-dynamic'
 
@@ -18,16 +19,17 @@ const stageDot: Record<string, string> = {
 
 export default async function PipelinePage() {
   const me = await requireMember()
+  const elevated = hasElevatedAccess(me)
   let query = supabase
     .from('opportunities')
     .select(
-      '*, organization:organizations(id, name), contact:contacts(id, first_name, last_name)'
+      '*, organization:organizations(id, name), contact:contacts(id, first_name, last_name), assignee:members(id, full_name, email)'
     )
     .eq('workspace_id', me.workspace_id)
     .eq('archived', false)
     .order('created_at', { ascending: false })
 
-  if (!hasElevatedAccess(me)) {
+  if (!elevated) {
     query = query.eq('assigned_to', me.id)
   }
 
@@ -124,9 +126,19 @@ export default async function PipelinePage() {
                       <p className="text-xs text-slate-400 mt-1.5 leading-snug">
                         {opp.title}
                       </p>
-                      <p className="text-sm font-bold text-emerald-400 mt-2">
-                        {formatCurrency(Number(opp.value_gel))}
-                      </p>
+                      <div className="flex items-center justify-between mt-2">
+                        <p className="text-sm font-bold text-emerald-400">
+                          {formatCurrency(Number(opp.value_gel))}
+                        </p>
+                        {elevated && (
+                          <span className="inline-flex items-center gap-1 text-[10px] text-slate-500">
+                            <span
+                              className={`h-1.5 w-1.5 rounded-full ${memberColor(opp.assigned_to)?.dot ?? 'bg-slate-600'}`}
+                            />
+                            {opp.assignee?.full_name || opp.assignee?.email || 'Unassigned'}
+                          </span>
+                        )}
+                      </div>
                     </Link>
                   ))}
                   {cols.length === 0 && (

@@ -16,6 +16,7 @@ import {
   Users,
 } from 'lucide-react'
 import { formatCurrency, formatDate, fullName } from '@/lib/utils'
+import { memberColor } from '@/lib/member-color'
 
 export const dynamic = 'force-dynamic'
 
@@ -242,6 +243,9 @@ export default async function OrganizationDetailPage({
             <div className="flex items-center gap-1.5 mb-1.5">
               <Users size={12} className="text-slate-600" />
               <span className="text-xs text-slate-500">Assigned to</span>
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${memberColor(org.assigned_to)?.dot ?? 'bg-slate-600'}`}
+              />
             </div>
             <div className="flex gap-2">
               <select

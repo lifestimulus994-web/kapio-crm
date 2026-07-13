@@ -35,6 +35,7 @@ export async function POST(request: Request) {
     user_metadata: {
       invited_workspace_id: me.workspace_id,
       invited_role: invitedRole,
+      invited_by: me.id,
       full_name: full_name || null,
     },
   })
@@ -44,5 +45,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: msg }, { status: 400 })
   }
 
-  return NextResponse.json({ ok: true })
+  return NextResponse.json({
+    ok: true,
+    note: 'წევრი დაემატა, მაგრამ საჭიროებს Kapio-ს ადმინისტრატორის დადასტურებას, სანამ სისტემაში შევა.',
+  })
 }

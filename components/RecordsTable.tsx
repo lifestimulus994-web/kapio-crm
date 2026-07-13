@@ -12,6 +12,9 @@ export type TableCell = {
   href?: string
   /** Open link in a new tab (external sites). */
   external?: boolean
+  /** Tailwind bg-* class for a small dot before the value — used to make an
+   *  assignee's identity recognizable at a glance (see lib/member-color.ts). */
+  dotColor?: string
 }
 
 export type TableRow = {
@@ -183,23 +186,26 @@ export default function RecordsTable({
                   {row.cells.map((cell, i) => (
                     <td key={i} className="py-3 pr-4 text-slate-300">
                       {cell.value ? (
-                        cell.href ? (
-                          <a
-                            href={cell.href}
-                            onClick={(e) => e.stopPropagation()}
-                            target={cell.external ? '_blank' : undefined}
-                            rel={
-                              cell.external ? 'noopener noreferrer' : undefined
-                            }
-                            className="text-slate-300 hover:text-emerald-400 transition-colors truncate inline-block max-w-[220px] align-bottom"
-                          >
-                            {cell.value}
-                          </a>
-                        ) : (
-                          <span className="truncate inline-block max-w-[220px] align-bottom">
-                            {cell.value}
-                          </span>
-                        )
+                        <span className="inline-flex items-center gap-1.5 max-w-[220px] align-bottom">
+                          {cell.dotColor && (
+                            <span className={`h-2 w-2 flex-none rounded-full ${cell.dotColor}`} />
+                          )}
+                          {cell.href ? (
+                            <a
+                              href={cell.href}
+                              onClick={(e) => e.stopPropagation()}
+                              target={cell.external ? '_blank' : undefined}
+                              rel={
+                                cell.external ? 'noopener noreferrer' : undefined
+                              }
+                              className="text-slate-300 hover:text-emerald-400 transition-colors truncate"
+                            >
+                              {cell.value}
+                            </a>
+                          ) : (
+                            <span className="truncate">{cell.value}</span>
+                          )}
+                        </span>
                       ) : (
                         <span className="text-slate-600">—</span>
                       )}

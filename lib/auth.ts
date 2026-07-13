@@ -12,11 +12,17 @@ export type Member = {
   // The workspace's plan (starter/business/pro) — used to gate AI spend
   // limits (lib/ai-usage.ts). Flattened from a join, not its own column.
   workspace_plan: string
-  // Approval gate: a brand-new self-signup workspace starts 'pending' and
-  // stays that way until the platform super-admin approves it in /admin.
-  // requireMember() redirects anyone in a non-'approved' workspace to
-  // /pending-approval before they can reach any real app page.
+  // Approval gate, workspace level: a brand-new self-signup workspace starts
+  // 'pending' and stays that way until the super-admin approves it in
+  // /admin — blocks EVERY member of it, not just the one who signed up.
   workspace_status: 'pending' | 'approved' | 'rejected'
+  // Approval gate, person level: on top of the workspace gate, each
+  // individual member — the signing-up owner AND every teammate invited
+  // afterward — also starts 'pending' and needs their own approval, even in
+  // an already-approved workspace. requireMember() redirects anyone who
+  // fails EITHER gate to /pending-approval.
+  status: 'pending' | 'approved' | 'rejected'
+  invited_by: string | null
 }
 
 // Owner and manager see/manage every record in the workspace; a plain
@@ -60,12 +66,15 @@ export async function getCurrentMember(): Promise<Member | null> {
 }
 
 // For Server Components / pages only (redirect() doesn't belong in API routes).
-// Also enforces the approval gate: a member of a pending/rejected workspace
-// never reaches a real app page, only /pending-approval.
+// Also enforces the two-tier approval gate: a member of a pending/rejected
+// workspace, OR one whose own row isn't approved yet, never reaches a real
+// app page — only /pending-approval.
 export async function requireMember(): Promise<Member> {
   const member = await getCurrentMember()
   if (!member) redirect('/login')
-  if (member.workspace_status !== 'approved') redirect('/pending-approval')
+  if (member.workspace_status !== 'approved' || member.status !== 'approved') {
+    redirect('/pending-approval')
+  }
   return member
 }
 
