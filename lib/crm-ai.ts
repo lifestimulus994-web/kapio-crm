@@ -5,7 +5,7 @@ import { GoogleGenAI, Type, type FunctionDeclaration } from '@google/genai'
 import { supabase } from '@/lib/supabase'
 import { searchCompanyOnPlaces } from '@/lib/places'
 import { searchIdentificationCode } from '@/lib/companyinfo'
-import { logAiUsage } from '@/lib/ai-usage'
+import { logAiUsage, getMonthlyUsageUsd, PLAN_AI_LIMIT_USD } from '@/lib/ai-usage'
 
 // ---------- knowledge base ----------
 // Loads the editable business knowledge file (crm/knowledge.md) that teaches
@@ -32,51 +32,89 @@ export type AiScope = {
   workspaceId: string
   memberId: string
   elevated: boolean
+  // Only an owner can invite/change-role/remove a teammate — same rule as
+  // app/api/team/route.ts and app/api/team/[id]/route.ts. 'manager' counts
+  // as `elevated` for CRM records but NOT for team membership actions.
+  isOwner: boolean
 }
 
 // ---------- CRM context snapshot ----------
+// Everything the model needs to answer ANY question about the workspace
+// without a follow-up get_record call — every column that matters for a
+// business question, not just the ones a list page happens to show.
 export async function buildContext(scope: AiScope) {
   let orgQuery = supabase
     .from('organizations')
-    .select('id, name, industry, email, phone')
+    .select(
+      'id, name, legal_name, identification_code, email, phone, website, address, industry, notes, assigned_to'
+    )
     .eq('workspace_id', scope.workspaceId)
     .eq('archived', false)
   let contactQuery = supabase
     .from('contacts')
-    .select('id, first_name, last_name, job_title, email, phone, organization_id')
+    .select(
+      'id, first_name, last_name, job_title, email, phone, notes, organization_id, assigned_to'
+    )
     .eq('workspace_id', scope.workspaceId)
     .eq('archived', false)
   let oppQuery = supabase
     .from('opportunities')
-    .select('id, title, value_gel, stage, organization_id, contact_id')
+    .select(
+      'id, title, value_gel, stage, pain_points, notes, next_action, owner, source, start_date, close_date, lost_reason, organization_id, contact_id, assigned_to'
+    )
     .eq('workspace_id', scope.workspaceId)
     .eq('archived', false)
   let taskQuery = supabase
     .from('tasks')
     .select(
-      'id, title, status, priority, owner, start_date, due_date, start_at, end_at, organization_id, contact_id, opportunity_id'
+      'id, title, description, status, priority, owner, start_date, due_date, start_at, end_at, organization_id, contact_id, opportunity_id, assigned_to'
     )
     .eq('workspace_id', scope.workspaceId)
     .eq('archived', false)
+  let leadQuery = supabase
+    .from('leads')
+    .select('id, full_name, phone, email, company, source, notes, status, assigned_to')
+    .eq('workspace_id', scope.workspaceId)
 
   if (!scope.elevated) {
     orgQuery = orgQuery.eq('assigned_to', scope.memberId)
     contactQuery = contactQuery.eq('assigned_to', scope.memberId)
     oppQuery = oppQuery.eq('assigned_to', scope.memberId)
     taskQuery = taskQuery.eq('assigned_to', scope.memberId)
+    leadQuery = leadQuery.eq('assigned_to', scope.memberId)
   }
 
-  const [orgs, contacts, opps, tasks] = await Promise.all([
+  // Team roster and workspace facts: always full (not filtered by
+  // assigned_to/elevated) — every teammate can see the team list in the UI
+  // (schema.sql "members can view team" policy), and needs it here so
+  // assigned_to uuids elsewhere in the snapshot resolve to real names.
+  const memberQuery = supabase
+    .from('members')
+    .select('id, full_name, email, role, status')
+    .eq('workspace_id', scope.workspaceId)
+  const workspaceQuery = supabase
+    .from('workspaces')
+    .select('name, plan, status')
+    .eq('id', scope.workspaceId)
+    .maybeSingle()
+
+  const [orgs, contacts, opps, tasks, leads, members, workspace] = await Promise.all([
     orgQuery,
     contactQuery,
     oppQuery,
     taskQuery,
+    leadQuery,
+    memberQuery,
+    workspaceQuery,
   ])
   return JSON.stringify({
     organizations: orgs.data ?? [],
     contacts: contacts.data ?? [],
     opportunities: opps.data ?? [],
     tasks: tasks.data ?? [],
+    leads: leads.data ?? [],
+    team: members.data ?? [],
+    workspace: workspace.data ?? null,
   })
 }
 
@@ -388,6 +426,51 @@ async function resolveTaskId(scope: AiScope, title?: string): Promise<string | n
   return hit?.id ?? null
 }
 
+async function resolveLeadId(scope: AiScope, name?: string): Promise<string | null> {
+  if (!name) return null
+  let q = supabase.from('leads').select('id, full_name').eq('workspace_id', scope.workspaceId)
+  if (!scope.elevated) q = q.eq('assigned_to', scope.memberId)
+  const { data } = await q
+  const target = name.toLowerCase().trim()
+  const list = data ?? []
+  const exact = list.find((l) => l.full_name?.toLowerCase().trim() === target)
+  if (exact) return exact.id
+  const partial = list.find((l) => {
+    const n = l.full_name?.toLowerCase().trim() ?? ''
+    return n.length > 0 && (n.includes(target) || target.includes(n))
+  })
+  return partial?.id ?? null
+}
+
+async function findExactLeadId(scope: AiScope, fullName: string): Promise<string | null> {
+  let q = supabase
+    .from('leads')
+    .select('id, full_name')
+    .eq('workspace_id', scope.workspaceId)
+    .ilike('full_name', fullName)
+  if (!scope.elevated) q = q.eq('assigned_to', scope.memberId)
+  const { data } = await q.limit(1).maybeSingle()
+  return data?.id ?? null
+}
+
+// Resolve a teammate by name or email — used by invite/update/remove_member
+// and to let create_*/update_* tools assign a record to someone other than
+// the caller via an `assignee` arg (elevated only, enforced at call sites).
+async function resolveMemberId(scope: AiScope, nameOrEmail?: string): Promise<string | null> {
+  if (!nameOrEmail) return null
+  const { data } = await supabase
+    .from('members')
+    .select('id, full_name, email')
+    .eq('workspace_id', scope.workspaceId)
+  const target = nameOrEmail.toLowerCase().trim()
+  const list = data ?? []
+  const hit =
+    list.find((m) => m.email?.toLowerCase().trim() === target) ??
+    list.find((m) => (m.full_name ?? '').toLowerCase().trim() === target) ??
+    list.find((m) => (m.full_name ?? '').toLowerCase().includes(target))
+  return hit?.id ?? null
+}
+
 const STAGES = [
   'New Lead',
   'Contacted',
@@ -407,6 +490,8 @@ export const DESTRUCTIVE_TOOLS = new Set([
   'archive_contact',
   'archive_opportunity',
   'archive_task',
+  'invite_member',
+  'remove_member',
 ])
 
 // ---------- tool definitions ----------
@@ -546,7 +631,7 @@ export const tools: FunctionDeclaration[] = [
       properties: {
         entity: {
           type: Type.STRING,
-          description: "One of: 'organization', 'contact', 'opportunity', 'task'.",
+          description: "One of: 'organization', 'contact', 'opportunity', 'task', 'lead'.",
         },
         name_or_id: {
           type: Type.STRING,
@@ -629,6 +714,10 @@ export const tools: FunctionDeclaration[] = [
         },
         next_action: { type: Type.STRING },
         notes: { type: Type.STRING },
+        owner: { type: Type.STRING, description: 'Salesperson responsible for this deal (free text).' },
+        source: { type: Type.STRING, description: 'Where this deal came from (e.g. referral, website, cold call).' },
+        start_date: { type: Type.STRING, description: 'When work/discussion on this deal started, YYYY-MM-DD.' },
+        close_date: { type: Type.STRING, description: 'Expected or actual close date, YYYY-MM-DD.' },
         organization_name: { type: Type.STRING },
         contact_name: { type: Type.STRING },
       },
@@ -704,6 +793,10 @@ export const tools: FunctionDeclaration[] = [
         value_gel: { type: Type.NUMBER, description: 'New deal value in GEL.' },
         next_action: { type: Type.STRING },
         notes: { type: Type.STRING },
+        owner: { type: Type.STRING, description: 'Salesperson responsible for this deal (free text).' },
+        source: { type: Type.STRING, description: 'Where this deal came from (e.g. referral, website, cold call).' },
+        start_date: { type: Type.STRING, description: 'When work/discussion on this deal started, YYYY-MM-DD.' },
+        close_date: { type: Type.STRING, description: 'Expected or actual close date, YYYY-MM-DD.' },
         lost_reason: {
           type: Type.STRING,
           description:
@@ -858,6 +951,105 @@ export const tools: FunctionDeclaration[] = [
         },
       },
       required: ['contact_name', 'body'],
+    },
+  },
+  {
+    name: 'create_lead',
+    description:
+      'Create a new lead (a raw funnel entry — a name/company that has not yet been qualified into an organization/contact/opportunity). Use when someone mentions a new prospect that is not ready to become a full CRM record yet.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        full_name: { type: Type.STRING, description: 'Lead\'s full name (required).' },
+        phone: { type: Type.STRING },
+        email: { type: Type.STRING },
+        company: { type: Type.STRING, description: 'Company name as free text (not linked to an organization record).' },
+        source: { type: Type.STRING, description: 'Where this lead came from (e.g. website, referral, cold call).' },
+        notes: { type: Type.STRING },
+      },
+      required: ['full_name'],
+    },
+  },
+  {
+    name: 'update_lead',
+    description:
+      "Update an EXISTING lead, found by full name. Change contact details, notes, or status ('new', 'contacted', 'converted', 'lost'). Pass only the fields you want to change.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        full_name: { type: Type.STRING, description: 'Current full name of the lead to update (required — used to find it).' },
+        new_full_name: { type: Type.STRING },
+        phone: { type: Type.STRING },
+        email: { type: Type.STRING },
+        company: { type: Type.STRING },
+        source: { type: Type.STRING },
+        notes: { type: Type.STRING },
+        status: { type: Type.STRING, description: "One of: 'new', 'contacted', 'converted', 'lost'." },
+      },
+      required: ['full_name'],
+    },
+  },
+  {
+    name: 'convert_lead',
+    description:
+      "Convert a qualified lead into real CRM records: creates an organization (if the lead has a company) and/or a contact from the lead's details, optionally an opportunity, links them together, marks the lead status as 'converted', and copies the lead's notes onto the new contact. Use when a lead is confirmed real/qualified and should move into the actual pipeline.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        full_name: { type: Type.STRING, description: 'Full name of the lead to convert (required).' },
+        create_opportunity: {
+          type: Type.BOOLEAN,
+          description: 'Whether to also create a pipeline opportunity for this lead. Defaults to true.',
+        },
+        opportunity_title: { type: Type.STRING, description: 'Title for the new opportunity, if created.' },
+      },
+      required: ['full_name'],
+    },
+  },
+  {
+    name: 'get_ai_usage',
+    description:
+      "Report this workspace's AI spend for the current calendar month vs its plan's monthly limit (Starter $5, Business $10, Pro unlimited/negotiated). Use whenever asked about AI cost, spend, budget, or usage.",
+    parameters: { type: Type.OBJECT, properties: {} },
+  },
+  {
+    name: 'invite_member',
+    description:
+      "Invite a new teammate to this workspace by creating their login (email + password), as 'manager' or 'member' role. OWNER ONLY. The invited person still needs the Kapio super-admin's manual approval before they can use the CRM — inviting them does not grant access by itself, it only creates the pending account, same as the Team page's own invite form.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        email: { type: Type.STRING, description: 'Login email for the new teammate (required).' },
+        password: { type: Type.STRING, description: 'Initial password, at least 6 characters (required).' },
+        full_name: { type: Type.STRING },
+        role: { type: Type.STRING, description: "'manager' or 'member'. Defaults to 'member'. Can never be 'owner'." },
+      },
+      required: ['email', 'password'],
+    },
+  },
+  {
+    name: 'update_member_role',
+    description:
+      "Change an existing teammate's role between 'manager' and 'member', found by name or email. OWNER ONLY. Cannot change anyone to/from 'owner'.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        member: { type: Type.STRING, description: 'Name or email of the teammate to change (required).' },
+        role: { type: Type.STRING, description: "'manager' or 'member' (required)." },
+      },
+      required: ['member', 'role'],
+    },
+  },
+  {
+    name: 'remove_member',
+    description:
+      "Remove a teammate from the workspace entirely, found by name or email — deletes their login and access permanently. OWNER ONLY. Cannot remove yourself or another workspace's member.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        member: { type: Type.STRING, description: 'Name or email of the teammate to remove (required).' },
+      },
+      required: ['member'],
     },
   },
 ]
@@ -1118,6 +1310,10 @@ async function runToolInner(
         pain_points: str(args.pain_points),
         next_action: str(args.next_action),
         notes: str(args.notes),
+        owner: str(args.owner),
+        source: str(args.source),
+        start_date: str(args.start_date),
+        close_date: str(args.close_date),
         organization_id: orgId,
         contact_id: contactId,
       })
@@ -1201,6 +1397,10 @@ async function runToolInner(
     if (args.value_gel !== undefined) patch.value_gel = num(args.value_gel)
     if (str(args.next_action)) patch.next_action = str(args.next_action)
     if (str(args.notes)) patch.notes = str(args.notes)
+    if (str(args.owner)) patch.owner = str(args.owner)
+    if (str(args.source)) patch.source = str(args.source)
+    if (str(args.start_date)) patch.start_date = str(args.start_date)
+    if (str(args.close_date)) patch.close_date = str(args.close_date)
     if (patch.stage === 'Lost') {
       const reason = str(args.lost_reason)
       if (!reason)
@@ -1436,16 +1636,40 @@ async function runToolInner(
       const id = (await resolveOrgId(scope, nameOrId)) ?? nameOrId
       let q = supabase.from('organizations').select('*').eq('id', id).eq('workspace_id', workspaceId)
       if (!scope.elevated) q = q.eq('assigned_to', scope.memberId)
-      const { data, error } = await q.maybeSingle()
+      const [{ data, error }, { data: comments }] = await Promise.all([
+        q.maybeSingle(),
+        supabase
+          .from('organization_comments')
+          .select('author, body, created_at')
+          .eq('organization_id', id)
+          .eq('workspace_id', workspaceId)
+          .order('created_at', { ascending: false }),
+      ])
       if (error || !data) return { success: false, error: `Organization "${nameOrId}" not found.` }
-      return { success: true, record: data }
+      return { success: true, record: data, comments: comments ?? [] }
     }
     if (entity === 'contact') {
       const id = (await resolveContactId(scope, nameOrId)) ?? nameOrId
       let q = supabase.from('contacts').select('*').eq('id', id).eq('workspace_id', workspaceId)
       if (!scope.elevated) q = q.eq('assigned_to', scope.memberId)
-      const { data, error } = await q.maybeSingle()
+      const [{ data, error }, { data: comments }] = await Promise.all([
+        q.maybeSingle(),
+        supabase
+          .from('contact_comments')
+          .select('author, body, created_at')
+          .eq('contact_id', id)
+          .eq('workspace_id', workspaceId)
+          .order('created_at', { ascending: false }),
+      ])
       if (error || !data) return { success: false, error: `Contact "${nameOrId}" not found.` }
+      return { success: true, record: data, comments: comments ?? [] }
+    }
+    if (entity === 'lead') {
+      const id = (await resolveLeadId(scope, nameOrId)) ?? nameOrId
+      let q = supabase.from('leads').select('*').eq('id', id).eq('workspace_id', workspaceId)
+      if (!scope.elevated) q = q.eq('assigned_to', scope.memberId)
+      const { data, error } = await q.maybeSingle()
+      if (error || !data) return { success: false, error: `Lead "${nameOrId}" not found.` }
       return { success: true, record: data }
     }
     if (entity === 'opportunity') {
@@ -1529,6 +1753,227 @@ async function runToolInner(
     if (error) return { success: false, error: error.message }
     revalidatePath('/tasks')
     return { success: true, archived: { id: taskId } }
+  }
+
+  if (name === 'create_lead') {
+    const fullName = str(args.full_name) ?? 'Unknown'
+    const existingId = await findExactLeadId(scope, fullName)
+    if (existingId) {
+      return {
+        success: true,
+        created: { id: existingId, full_name: fullName },
+        note: 'already existed, reused',
+      }
+    }
+    const { data, error } = await supabase
+      .from('leads')
+      .insert({
+        workspace_id: workspaceId,
+        assigned_to: scope.memberId,
+        full_name: fullName,
+        phone: str(args.phone),
+        email: str(args.email),
+        company: str(args.company),
+        source: str(args.source),
+        notes: str(args.notes),
+      })
+      .select('id, full_name')
+      .single()
+    if (error) return { success: false, error: error.message }
+    revalidatePath('/leads')
+    return { success: true, created: data }
+  }
+
+  if (name === 'update_lead') {
+    const leadId = await resolveLeadId(scope, str(args.full_name) ?? undefined)
+    if (!leadId)
+      return { success: false, error: `Lead "${args.full_name}" not found.` }
+    const patch: Record<string, unknown> = {}
+    if (str(args.new_full_name)) patch.full_name = str(args.new_full_name)
+    if (str(args.phone)) patch.phone = str(args.phone)
+    if (str(args.email)) patch.email = str(args.email)
+    if (str(args.company)) patch.company = str(args.company)
+    if (str(args.source)) patch.source = str(args.source)
+    if (str(args.notes)) patch.notes = str(args.notes)
+    const statuses = ['new', 'contacted', 'converted', 'lost']
+    if (statuses.includes(String(args.status))) patch.status = String(args.status)
+    if (Object.keys(patch).length === 0)
+      return { success: false, error: 'Nothing to update.' }
+    let q = supabase.from('leads').update(patch).eq('id', leadId).eq('workspace_id', workspaceId)
+    if (!scope.elevated) q = q.eq('assigned_to', scope.memberId)
+    const { data, error } = await q.select('id, full_name, status').single()
+    if (error) return { success: false, error: error.message }
+    revalidatePath('/leads')
+    revalidatePath(`/leads/${leadId}`)
+    return { success: true, updated: data }
+  }
+
+  if (name === 'convert_lead') {
+    const leadId = await resolveLeadId(scope, str(args.full_name) ?? undefined)
+    if (!leadId)
+      return { success: false, error: `Lead "${args.full_name}" not found.` }
+    let leadQuery = supabase.from('leads').select('*').eq('id', leadId).eq('workspace_id', workspaceId)
+    if (!scope.elevated) leadQuery = leadQuery.eq('assigned_to', scope.memberId)
+    const { data: lead, error: leadErr } = await leadQuery.maybeSingle()
+    if (leadErr || !lead) return { success: false, error: `Lead "${args.full_name}" not found.` }
+
+    let orgId: string | null = null
+    if (lead.company) {
+      orgId = await findExactOrgId(scope, lead.company)
+      if (!orgId) {
+        const { data: org, error: orgErr } = await supabase
+          .from('organizations')
+          .insert({
+            workspace_id: workspaceId,
+            assigned_to: scope.memberId,
+            name: lead.company,
+          })
+          .select('id')
+          .single()
+        if (orgErr) return { success: false, error: orgErr.message }
+        orgId = org.id
+      }
+    }
+
+    const nameParts = String(lead.full_name ?? '').trim().split(/\s+/)
+    const firstName = nameParts[0] || 'Unknown'
+    const lastName = nameParts.slice(1).join(' ')
+    let contactId = await findExactContactId(scope, firstName, lastName)
+    if (!contactId) {
+      const { data: contact, error: contactErr } = await supabase
+        .from('contacts')
+        .insert({
+          workspace_id: workspaceId,
+          assigned_to: scope.memberId,
+          first_name: firstName,
+          last_name: lastName,
+          email: lead.email,
+          phone: lead.phone,
+          notes: lead.notes,
+          organization_id: orgId,
+        })
+        .select('id')
+        .single()
+      if (contactErr) return { success: false, error: contactErr.message }
+      contactId = contact.id
+    }
+
+    let oppId: string | null = null
+    const wantsOpp = args.create_opportunity !== false
+    if (wantsOpp) {
+      const oppTitle = str(args.opportunity_title) ?? `${lead.full_name}${lead.company ? ` (${lead.company})` : ''}`
+      const { data: opp, error: oppErr } = await supabase
+        .from('opportunities')
+        .insert({
+          workspace_id: workspaceId,
+          assigned_to: scope.memberId,
+          title: oppTitle,
+          stage: 'New Lead',
+          notes: lead.notes,
+          source: lead.source,
+          organization_id: orgId,
+          contact_id: contactId,
+        })
+        .select('id')
+        .single()
+      if (oppErr) return { success: false, error: oppErr.message }
+      oppId = opp.id
+    }
+
+    await supabase.from('leads').update({ status: 'converted' }).eq('id', leadId).eq('workspace_id', workspaceId)
+    revalidatePath('/leads')
+    revalidatePath('/organizations')
+    revalidatePath('/contacts')
+    revalidatePath('/dashboard')
+    return {
+      success: true,
+      converted: { lead_id: leadId, organization_id: orgId, contact_id: contactId, opportunity_id: oppId },
+    }
+  }
+
+  if (name === 'get_ai_usage') {
+    const planQuery = await supabase.from('workspaces').select('plan').eq('id', workspaceId).maybeSingle()
+    const plan = planQuery.data?.plan ?? 'starter'
+    const usedUsd = await getMonthlyUsageUsd(workspaceId)
+    const limitUsd = PLAN_AI_LIMIT_USD[plan] ?? PLAN_AI_LIMIT_USD.starter ?? null
+    return {
+      success: true,
+      plan,
+      used_usd: Math.round(usedUsd * 100) / 100,
+      limit_usd: limitUsd,
+      unlimited: limitUsd === null,
+    }
+  }
+
+  if (name === 'invite_member') {
+    if (!scope.isOwner)
+      return { success: false, error: 'Only the workspace owner can invite a teammate.' }
+    const email = str(args.email)
+    const password = str(args.password)
+    if (!email || !password || password.length < 6)
+      return { success: false, error: 'A valid email and a password of at least 6 characters are required.' }
+    const invitedRole = String(args.role) === 'manager' ? 'manager' : 'member'
+    const { data: created, error } = await supabase.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: {
+        invited_workspace_id: workspaceId,
+        invited_role: invitedRole,
+        invited_by: scope.memberId,
+        full_name: str(args.full_name),
+      },
+    })
+    if (error || !created.user) return { success: false, error: error?.message ?? 'Could not create the user.' }
+    revalidatePath('/team')
+    return {
+      success: true,
+      invited: { email, role: invitedRole },
+      note: 'Account created, but still needs the Kapio super-admin to approve it before this person can use the CRM.',
+    }
+  }
+
+  if (name === 'update_member_role') {
+    if (!scope.isOwner)
+      return { success: false, error: 'Only the workspace owner can change a teammate\'s role.' }
+    const memberId = await resolveMemberId(scope, str(args.member) ?? undefined)
+    if (!memberId) return { success: false, error: `Teammate "${args.member}" not found.` }
+    const role = String(args.role)
+    if (!['manager', 'member'].includes(role))
+      return { success: false, error: "role must be 'manager' or 'member'." }
+    const { data, error } = await supabase
+      .from('members')
+      .update({ role })
+      .eq('id', memberId)
+      .eq('workspace_id', workspaceId)
+      .neq('role', 'owner')
+      .select('id, full_name, email, role')
+      .single()
+    if (error) return { success: false, error: error.message }
+    revalidatePath('/team')
+    return { success: true, updated: data }
+  }
+
+  if (name === 'remove_member') {
+    if (!scope.isOwner)
+      return { success: false, error: 'Only the workspace owner can remove a teammate.' }
+    const memberId = await resolveMemberId(scope, str(args.member) ?? undefined)
+    if (!memberId) return { success: false, error: `Teammate "${args.member}" not found.` }
+    if (memberId === scope.memberId)
+      return { success: false, error: 'You cannot remove yourself.' }
+    const { data: target } = await supabase
+      .from('members')
+      .select('id, role')
+      .eq('id', memberId)
+      .eq('workspace_id', workspaceId)
+      .maybeSingle()
+    if (!target) return { success: false, error: `Teammate "${args.member}" not found.` }
+    if (target.role === 'owner')
+      return { success: false, error: 'The workspace owner cannot be removed.' }
+    await supabase.from('members').delete().eq('id', memberId).eq('workspace_id', workspaceId)
+    await supabase.auth.admin.deleteUser(memberId)
+    revalidatePath('/team')
+    return { success: true, removed: { id: memberId } }
   }
 
   return { success: false, error: `Unknown tool: ${name}` }

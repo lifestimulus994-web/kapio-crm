@@ -20,15 +20,19 @@ type PendingConfirmation = { name: string; args: Record<string, unknown>; descri
 function describeDestructive(name: string, args: Record<string, unknown>): string {
   switch (name) {
     case 'archive_organization':
-      return `Archive company "${args.organization_name}"?`
+      return `დაარქივდეს კომპანია "${args.organization_name}"?`
     case 'archive_contact':
-      return `Archive contact "${args.contact_name}"?`
+      return `დაარქივდეს კონტაქტი "${args.contact_name}"?`
     case 'archive_opportunity':
-      return `Archive deal "${args.opportunity_title}"?`
+      return `დაარქივდეს გარიგება "${args.opportunity_title}"?`
     case 'archive_task':
-      return `Archive task "${args.task_title}"?`
+      return `დაარქივდეს დავალება "${args.task_title}"?`
+    case 'invite_member':
+      return `დაპატიჟდეს "${args.email}" გუნდში, როგორც ${args.role === 'manager' ? 'მენეჯერი' : 'წევრი'}?`
+    case 'remove_member':
+      return `წაიშალოს გუნდის წევრი "${args.member}" და მისი შესვლის მონაცემები?`
     default:
-      return `Confirm ${name}?`
+      return `დადასტურდეს ${name}?`
   }
 }
 
@@ -40,11 +44,12 @@ export async function POST(req: Request) {
     workspaceId: me.workspace_id,
     memberId: me.id,
     elevated: hasElevatedAccess(me),
+    isOwner: me.role === 'owner',
   }
 
   if (!process.env.GEMINI_API_KEY) {
     return NextResponse.json(
-      { error: 'GEMINI_API_KEY is not configured on the server.' },
+      { error: 'GEMINI_API_KEY არ არის კონფიგურირებული სერვერზე.' },
       { status: 500 }
     )
   }
@@ -57,25 +62,25 @@ export async function POST(req: Request) {
   try {
     body = await req.json()
   } catch {
-    return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 })
+    return NextResponse.json({ error: 'არასწორი მოთხოვნა.' }, { status: 400 })
   }
 
   // A confirmed destructive action from the UI — run it directly, no AI call.
   if (body.confirm) {
     const { name, args } = body.confirm
     if (!DESTRUCTIVE_TOOLS.has(name)) {
-      return NextResponse.json({ error: 'Not a confirmable action.' }, { status: 400 })
+      return NextResponse.json({ error: 'ეს ქმედება არ საჭიროებს დადასტურებას.' }, { status: 400 })
     }
     const result = await runTool(name, args ?? {}, scope)
     const reply = result.success
-      ? `Done.`
-      : `Couldn't do that: ${result.error ?? 'unknown error'}`
+      ? `შესრულდა.`
+      : `ვერ შესრულდა: ${result.error ?? 'უცნობი შეცდომა'}`
     return NextResponse.json({ reply, actions: [{ name, result }] })
   }
 
   const message = (body.message ?? '').trim()
   if (!message) {
-    return NextResponse.json({ error: 'Message is required.' }, { status: 400 })
+    return NextResponse.json({ error: 'შეტყობინება აუცილებელია.' }, { status: 400 })
   }
   const history = (body.history ?? []).slice(-10)
 
@@ -250,6 +255,20 @@ Guidelines:
   "note" says which ones) — don't silently omit a missing field, say plainly
   it couldn't be found publicly. If nothing reliable was found at all, create
   the company with the details the user gave and say the lookup found nothing.
+- LEADS: the snapshot's "leads" array is raw, unqualified funnel entries — separate
+  from organizations/contacts/opportunities. Use create_lead/update_lead for a
+  new or edited lead. Once a lead is confirmed real and worth pursuing, use
+  convert_lead to turn it into an organization/contact/opportunity in one step
+  (it also marks the lead 'converted') — don't manually recreate a lead's info
+  as a new organization/contact yourself, always convert_lead instead.
+- TEAM: the snapshot's "team" array lists every teammate (id, full_name, email,
+  role, status) — use it to answer "who's on the team" or resolve assigned_to
+  ids to names. Only the OWNER may invite_member, update_member_role, or
+  remove_member — if a non-owner asks, say only the owner can do that. An
+  invited teammate still needs the Kapio super-admin's separate approval before
+  they can log in; say so after inviting.
+- WORKSPACE / AI USAGE: the snapshot's "workspace" object has this workspace's
+  name/plan/status. Call get_ai_usage when asked about AI cost, spend, or budget.
 - Never search for or store passwords or private credentials — those are not
   publicly available and must never be guessed.
 - After a tool runs, briefly confirm what changed. Never claim you changed

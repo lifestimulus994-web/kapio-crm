@@ -20,6 +20,7 @@ export async function POST(req: Request) {
     workspaceId: me.workspace_id,
     memberId: me.id,
     elevated: hasElevatedAccess(me),
+    isOwner: me.role === 'owner',
   }
 
   let body: { taskId?: string; outcome?: string; mode?: string }

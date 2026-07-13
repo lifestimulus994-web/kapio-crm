@@ -32,6 +32,12 @@ const WRITE_TOOLS = new Set([
   'archive_contact',
   'archive_opportunity',
   'archive_task',
+  'create_lead',
+  'update_lead',
+  'convert_lead',
+  'invite_member',
+  'update_member_role',
+  'remove_member',
 ])
 
 export async function POST(req: Request) {
@@ -44,6 +50,7 @@ export async function POST(req: Request) {
     workspaceId: me.workspace_id,
     memberId: me.id,
     elevated: hasElevatedAccess(me),
+    isOwner: me.role === 'owner',
   }
 
   const contentType = req.headers.get('content-type') ?? ''
