@@ -918,21 +918,30 @@ async function runToolInner(
   // event; end_at is computed from start_at + duration_minutes when not given.
   // We also derive start_date / due_date so the task's dates stay filled in
   // (and so it shows on the calendar without needing an all_day column).
+  // Georgia runs a single timezone, UTC+4, with no DST. The model produces a
+  // timezone-less "local wall clock" string (e.g. "2026-07-15T18:00:00") —
+  // parsing that with a bare `new Date(str)` uses the SERVER's own runtime
+  // timezone, which on Vercel is UTC, not Asia/Tbilisi. That silently shifted
+  // every timed task by 4 hours (18:00 Tbilisi got stored/shown as 22:00).
+  // Appending the real +04:00 offset makes the instant unambiguous regardless
+  // of where the server happens to run.
   const parseDate = (v: unknown) => {
     const s = str(v)
     if (!s) return null
-    // The model often appends a 'Z' or offset to the time it picked, which would
-    // shift the event by the local UTC offset on the calendar. This CRM runs in
-    // a single timezone, so treat the value as local wall-clock time: strip any
-    // trailing zone designator before parsing.
     const local = s.replace(/(Z|[+-]\d{2}:?\d{2})$/, '')
-    const d = new Date(local)
+    const d = new Date(`${local}+04:00`)
     return Number.isNaN(d.getTime()) ? null : d
   }
-  const ymdLocal = (d: Date) =>
-    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
-      d.getDate()
+  // d is a correct UTC instant; render its Tbilisi calendar date rather than
+  // the server runtime's (also UTC) — otherwise a late-night Tbilisi time
+  // (e.g. 01:00, which is 21:00 UTC the PREVIOUS day) would show as the
+  // wrong day.
+  const ymdLocal = (d: Date) => {
+    const tbilisi = new Date(d.getTime() + 4 * 3600000)
+    return `${tbilisi.getUTCFullYear()}-${String(tbilisi.getUTCMonth() + 1).padStart(2, '0')}-${String(
+      tbilisi.getUTCDate()
     ).padStart(2, '0')}`
+  }
   const schedFrom = (a: Record<string, unknown>) => {
     const start = parseDate(a.start_at)
     let end = parseDate(a.end_at)
