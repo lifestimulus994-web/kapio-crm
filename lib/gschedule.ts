@@ -84,6 +84,29 @@ export function parseGeorgianSchedule(
     }
   }
 
+  // 3) bare "N-ზე" / "Nზე" (colloquial "at N", no "საათ" word at all — e.g.
+  // "18-ზე ჩანიშნე" or "6-ზე შევხვდეთ"). Only when nothing more explicit
+  // matched, and only within a valid hour range so it doesn't fire on an
+  // unrelated number (a price, a quantity) that happens to precede "-ზე".
+  // 4) bare "N-ზე" / "Nზე" (colloquial "at N", no "საათ" word at all — e.g.
+  // "18-ზე ჩანიშნე"). This is genuinely ambiguous in Georgian — "5-ზე
+  // შევთანხმდით" means "agreed on 5 [GEL]", not "at 5 o'clock" — so only
+  // attempt it when the message also has an unmistakable scheduling verb/
+  // noun nearby; without that guard this used to misfire on prices/amounts.
+  const SCHEDULING_CONTEXT =
+    /შეხვედრ|ჩანიშნ|ჩამინიშნ|დაჯავშნ|ვხვდებ|შევხვდ|დარეკ|ზარი|თასქ|დავალებ|გადავდო|გადავწი/
+  if (hour === null && SCHEDULING_CONTEXT.test(text)) {
+    // No \b here: Georgian letters aren't "word" characters to JS regex, so
+    // \b never matches after ზე and silently fails the whole pattern. The
+    // negative lookbehind instead makes sure we capture a digit run from its
+    // true start (so "500-ზე" isn't misread as hour "00" from its tail).
+    const bare = text.match(/(?<!\d)(\d{1,2})\s*-?\s*ზე(?![ა-ჰ])/)
+    if (bare) {
+      const h = parseInt(bare[1], 10)
+      if (h >= 0 && h <= 23) hour = h
+    }
+  }
+
   // "ნახევარი" → :30 (e.g. "ხუთის ნახევარი" = 4:30) — but NOT "ნახევარი საათი",
   // which is a half-hour DURATION, handled below.
   if (
