@@ -13,7 +13,8 @@
 --   5. Diagnostics              — AI tool-failure log + per-workspace AI usage/cost
 --   6. Grants                   — Supabase API role access
 --   7. Auth trigger             — auto-provisions a workspace at signup
---   8. ONE-TIME MANUAL BACKFILL — commented out, only for pre-multi-tenant data
+--   8. ONE-TIME MANUAL BACKFILL — commented out; multi-tenant AND approval-gate
+--                                  backfills (run each once, see comments)
 -- ============================================================================
 
 
@@ -38,6 +39,18 @@ alter table public.workspaces add column if not exists plan text not null defaul
 alter table public.workspaces drop constraint if exists workspaces_plan_check;
 alter table public.workspaces add constraint workspaces_plan_check
   check (plan in ('starter', 'business', 'pro'));
+
+-- Approval gate: a brand-new self-signup workspace starts 'pending' and
+-- every member of it is blocked (redirected to /pending-approval by
+-- requireMember() in lib/auth.ts) until the platform super-admin approves
+-- it in /admin. See the ONE-TIME BACKFILL near the bottom of this file —
+-- it must be run once, right after this ALTER, so every workspace that
+-- already existed before this feature shipped is grandfathered in as
+-- 'approved' instead of getting retroactively locked out.
+alter table public.workspaces add column if not exists status text not null default 'pending';
+alter table public.workspaces drop constraint if exists workspaces_status_check;
+alter table public.workspaces add constraint workspaces_status_check
+  check (status in ('pending', 'approved', 'rejected'));
 
 -- Team accounts. id mirrors auth.users.id 1:1 — created either by the public
 -- /signup form (self-signup, becomes 'owner' of a brand-new workspace) or by
@@ -403,3 +416,13 @@ create trigger on_auth_user_created
 -- alter table public.contact_comments      alter column workspace_id set not null;
 -- alter table public.opportunity_comments  alter column workspace_id set not null;
 -- alter table public.task_comments         alter column workspace_id set not null;
+
+-- ---------------------------------------------------------------------------
+-- ONE-TIME MANUAL STEP for the approval gate: run this ONCE, right after
+-- adding workspaces.status above, and NEVER again (unlike the rest of this
+-- file, this is NOT safe to re-run — running it a second time would
+-- auto-approve every real pending signup that had shown up since). Marks
+-- every workspace that already existed before the approval gate shipped as
+-- 'approved', so nobody currently using the app gets locked out.
+-- ---------------------------------------------------------------------------
+-- update public.workspaces set status = 'approved' where status = 'pending';
