@@ -5,6 +5,7 @@ import { GoogleGenAI, Type, type FunctionDeclaration } from '@google/genai'
 import { supabase } from '@/lib/supabase'
 import { searchCompanyOnPlaces } from '@/lib/places'
 import { searchIdentificationCode } from '@/lib/companyinfo'
+import { logAiUsage } from '@/lib/ai-usage'
 
 // ---------- knowledge base ----------
 // Loads the editable business knowledge file (crm/knowledge.md) that teaches
@@ -99,7 +100,8 @@ type CompanyInfo = {
 
 export async function findCompanyContacts(
   name: string,
-  hint?: string
+  hint: string | undefined,
+  workspaceId: string
 ): Promise<CompanyInfo> {
   if (!name?.trim()) {
     return {
@@ -126,7 +128,7 @@ export async function findCompanyContacts(
   //    web-sourced best-effort. Both seeded with the corrected Places name
   //    (if any) so they look up the right company.
   const [gem, registry] = await Promise.all([
-    groundCompanyWithGemini(place.official_name || name, hint),
+    groundCompanyWithGemini(place.official_name || name, hint, workspaceId),
     searchIdentificationCode(place.official_name || name),
   ])
 
@@ -150,7 +152,8 @@ export async function findCompanyContacts(
 // Gemini grounded in Google Search — best-effort public fields for a company.
 async function groundCompanyWithGemini(
   name: string,
-  hint?: string
+  hint: string | undefined,
+  workspaceId: string
 ): Promise<CompanyInfo> {
   const empty: CompanyInfo = {
     official_name: '',
@@ -209,6 +212,14 @@ Do NOT guess or fabricate. Never return passwords or private credentials.`
 
   try {
     const res = await ground()
+
+    await logAiUsage({
+      workspaceId,
+      route: 'company_lookup',
+      inputTokens: res.usageMetadata?.promptTokenCount ?? 0,
+      outputTokens: res.usageMetadata?.candidatesTokenCount ?? 0,
+      grounded: true,
+    })
 
     const text = res.text ?? ''
     const match = text.match(/\{[\s\S]*\}/)
@@ -993,7 +1004,7 @@ async function runToolInner(
     const company = str(args.name)
     if (!company)
       return { success: false, error: 'Company name is required.' }
-    const found = await findCompanyContacts(company, str(args.hint) ?? undefined)
+    const found = await findCompanyContacts(company, str(args.hint) ?? undefined, workspaceId)
     const anything =
       found.email ||
       found.phone ||

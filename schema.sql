@@ -10,7 +10,7 @@
 --   2. Core CRM tables          — organizations, contacts, opportunities, tasks
 --   3. Comments / activity feed — one comment table per core entity
 --   4. Leads                    — funnel-entry, separate from organizations
---   5. Diagnostics              — AI tool-failure log
+--   5. Diagnostics              — AI tool-failure log + per-workspace AI usage/cost
 --   6. Grants                   — Supabase API role access
 --   7. Auth trigger             — auto-provisions a workspace at signup
 --   8. ONE-TIME MANUAL BACKFILL — commented out, only for pre-multi-tenant data
@@ -262,7 +262,9 @@ create index if not exists idx_leads_workspace on public.leads(workspace_id);
 -- 5. DIAGNOSTICS
 -- Logs unexpected AI tool-call failures (not ordinary "not found" results,
 -- which the tool already returns as a normal {success:false} value) so they
--- can be reviewed later without relying on short-lived platform logs.
+-- can be reviewed later without relying on short-lived platform logs. Also
+-- meters real Gemini token usage per workspace so plan spend limits
+-- (lib/ai-usage.ts) can be enforced.
 -- ============================================================================
 
 create table if not exists public.tool_failures (
@@ -273,6 +275,23 @@ create table if not exists public.tool_failures (
   created_at timestamptz not null default now()
 );
 create index if not exists idx_tool_failures_created on public.tool_failures(created_at desc);
+
+-- One row per Gemini API call. cost_usd is computed at insert time from the
+-- call's real token counts (lib/ai-cost.ts) against published per-token
+-- pricing — an estimate, not a reconciliation against Google's actual bill,
+-- but accurate enough to gate a plan's monthly spend limit.
+create table if not exists public.ai_usage (
+  id            uuid primary key default gen_random_uuid(),
+  workspace_id  uuid not null references public.workspaces(id),
+  route         text not null, -- 'chat' | 'voice' | 'transcribe' | 'task_complete' | 'company_lookup'
+  input_tokens  integer not null default 0,
+  output_tokens integer not null default 0,
+  audio_input   boolean not null default false,
+  grounded      boolean not null default false,
+  cost_usd      numeric not null default 0,
+  created_at    timestamptz not null default now()
+);
+create index if not exists idx_ai_usage_workspace_created on public.ai_usage(workspace_id, created_at);
 
 
 -- ============================================================================

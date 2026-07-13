@@ -9,6 +9,9 @@ export type Member = {
   full_name: string | null
   role: 'owner' | 'manager' | 'member'
   created_at: string
+  // The workspace's plan (starter/business/pro) — used to gate AI spend
+  // limits (lib/ai-usage.ts). Flattened from a join, not its own column.
+  workspace_plan: string
 }
 
 // Owner and manager see/manage every record in the workspace; a plain
@@ -26,8 +29,17 @@ export async function getCurrentMember(): Promise<Member | null> {
   } = await supabase.auth.getUser()
   if (!user) return null
 
-  const { data } = await admin.from('members').select('*').eq('id', user.id).single()
-  return (data as Member) ?? null
+  const { data } = await admin
+    .from('members')
+    .select('*, workspace:workspaces(plan)')
+    .eq('id', user.id)
+    .single()
+  if (!data) return null
+
+  const { workspace, ...member } = data as typeof data & {
+    workspace: { plan: string } | null
+  }
+  return { ...member, workspace_plan: workspace?.plan ?? 'starter' } as Member
 }
 
 // For Server Components / pages only (redirect() doesn't belong in API routes).

@@ -3,6 +3,7 @@ import { GoogleGenAI, FunctionCallingConfigMode } from '@google/genai'
 import { buildContext, loadKnowledge, tools, runTool, type AiScope } from '@/lib/crm-ai'
 import { getCurrentMember, hasElevatedAccess } from '@/lib/auth'
 import { parseGeorgianSchedule } from '@/lib/gschedule'
+import { checkAiBudget, logAiUsage, budgetExceededMessage } from '@/lib/ai-usage'
 
 export const dynamic = 'force-dynamic'
 
@@ -57,6 +58,11 @@ export async function POST(req: Request) {
     )
   }
 
+  const budget = await checkAiBudget(me.workspace_id, me.workspace_plan)
+  if (!budget.allowed) {
+    return NextResponse.json({ error: budgetExceededMessage(budget) }, { status: 402 })
+  }
+
   // Read the uploaded audio file.
   let file: File | null = null
   try {
@@ -85,6 +91,17 @@ export async function POST(req: Request) {
 
   const mimeType = file.type || 'audio/mpeg'
   const base64 = Buffer.from(await file.arrayBuffer()).toString('base64')
+
+  // Usage tracking (hoisted above the try so `finally` can still log
+  // whatever was spent even if the request fails partway through): the
+  // FIRST Gemini call carries the inline audio (billed at the audio input
+  // rate); every later call in the tool-calling loop is text-only (billed
+  // at the text rate) — tracked separately for an accurate cost estimate.
+  let audioCallDone = false
+  let audioInputTokens = 0
+  let audioOutputTokens = 0
+  let textInputTokens = 0
+  let textOutputTokens = 0
 
   try {
     const [context, knowledge] = await Promise.all([
@@ -224,11 +241,20 @@ ${context}`
       }
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         try {
-          return await ai.models.generateContent({
+          const res = await ai.models.generateContent({
             model: MODEL,
             contents: reqContents,
             config: cfg,
           })
+          if (!audioCallDone) {
+            audioInputTokens += res.usageMetadata?.promptTokenCount ?? 0
+            audioOutputTokens += res.usageMetadata?.candidatesTokenCount ?? 0
+            audioCallDone = true
+          } else {
+            textInputTokens += res.usageMetadata?.promptTokenCount ?? 0
+            textOutputTokens += res.usageMetadata?.candidatesTokenCount ?? 0
+          }
+          return res
         } catch (e) {
           if (!isOverloaded(e) || attempt === MAX_ATTEMPTS - 1) throw e
           await new Promise((r) => setTimeout(r, 500 * 2 ** attempt))
@@ -321,6 +347,25 @@ ${context}`
       )
     }
     return NextResponse.json({ error: raw }, { status: 500 })
+  } finally {
+    // Log whatever was actually spent, even on a failed/partial turn.
+    if (audioInputTokens > 0 || audioOutputTokens > 0) {
+      await logAiUsage({
+        workspaceId: me.workspace_id,
+        route: 'voice',
+        inputTokens: audioInputTokens,
+        outputTokens: audioOutputTokens,
+        audioInput: true,
+      })
+    }
+    if (textInputTokens > 0 || textOutputTokens > 0) {
+      await logAiUsage({
+        workspaceId: me.workspace_id,
+        route: 'voice',
+        inputTokens: textInputTokens,
+        outputTokens: textOutputTokens,
+      })
+    }
   }
 }
 

@@ -3,6 +3,7 @@ import { GoogleGenAI, FunctionCallingConfigMode } from '@google/genai'
 import { supabase } from '@/lib/supabase'
 import { getCurrentMember, hasElevatedAccess } from '@/lib/auth'
 import { buildContext, loadKnowledge, tools, runTool, type AiScope } from '@/lib/crm-ai'
+import { checkAiBudget, logAiUsage, budgetExceededMessage } from '@/lib/ai-usage'
 
 export const dynamic = 'force-dynamic'
 
@@ -94,6 +95,20 @@ export async function POST(req: Request) {
     )
   }
 
+  // The task is already marked done above — an exhausted AI budget shouldn't
+  // block that, just skip the AI summarization/follow-up step.
+  const budget = await checkAiBudget(me.workspace_id, me.workspace_plan)
+  if (!budget.allowed) {
+    return NextResponse.json({
+      ok: true,
+      summary: `Task marked done. ${budgetExceededMessage(budget)}`,
+      actions,
+    })
+  }
+
+  let usedInputTokens = 0
+  let usedOutputTokens = 0
+
   try {
     const [context, knowledge] = await Promise.all([
       buildContext(scope),
@@ -143,11 +158,14 @@ ${context}`
       }
       for (let attempt = 0; attempt < 4; attempt++) {
         try {
-          return await ai.models.generateContent({
+          const res = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
             contents: reqContents,
             config: cfg,
           })
+          usedInputTokens += res.usageMetadata?.promptTokenCount ?? 0
+          usedOutputTokens += res.usageMetadata?.candidatesTokenCount ?? 0
+          return res
         } catch (e) {
           if (!isOverloaded(e) || attempt === 3) throw e
           await new Promise((r) => setTimeout(r, 500 * 2 ** attempt))
@@ -183,5 +201,14 @@ ${context}`
       { ok: true, summary: `Task marked done, but AI logging failed: ${raw}`, actions },
       { status: 200 }
     )
+  } finally {
+    if (usedInputTokens > 0 || usedOutputTokens > 0) {
+      await logAiUsage({
+        workspaceId: me.workspace_id,
+        route: 'task_complete',
+        inputTokens: usedInputTokens,
+        outputTokens: usedOutputTokens,
+      })
+    }
   }
 }

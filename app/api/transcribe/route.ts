@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
 import { GoogleGenAI } from '@google/genai'
+import { getCurrentMember } from '@/lib/auth'
+import { checkAiBudget, logAiUsage, budgetExceededMessage } from '@/lib/ai-usage'
 
 export const dynamic = 'force-dynamic'
 
@@ -11,11 +13,19 @@ export const dynamic = 'force-dynamic'
 const MAX_BYTES = 15 * 1024 * 1024
 
 export async function POST(req: Request) {
+  const me = await getCurrentMember()
+  if (!me) return NextResponse.json({ error: 'შესვლა საჭიროა' }, { status: 401 })
+
   if (!process.env.GEMINI_API_KEY) {
     return NextResponse.json(
       { error: 'GEMINI_API_KEY is not configured on the server.' },
       { status: 500 }
     )
+  }
+
+  const budget = await checkAiBudget(me.workspace_id, me.workspace_plan)
+  if (!budget.allowed) {
+    return NextResponse.json({ error: budgetExceededMessage(budget) }, { status: 402 })
   }
 
   let file: File | null = null
@@ -46,6 +56,9 @@ export async function POST(req: Request) {
   const mimeType = file.type || 'audio/webm'
   const base64 = Buffer.from(await file.arrayBuffer()).toString('base64')
 
+  let usedInputTokens = 0
+  let usedOutputTokens = 0
+
   try {
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
 
@@ -71,6 +84,8 @@ export async function POST(req: Request) {
             },
           ],
         })
+        usedInputTokens += response.usageMetadata?.promptTokenCount ?? 0
+        usedOutputTokens += response.usageMetadata?.candidatesTokenCount ?? 0
         break
       } catch (e) {
         if (!isOverloaded(e) || attempt === 3) throw e
@@ -95,5 +110,15 @@ export async function POST(req: Request) {
       )
     }
     return NextResponse.json({ error: raw }, { status: 500 })
+  } finally {
+    if (usedInputTokens > 0 || usedOutputTokens > 0) {
+      await logAiUsage({
+        workspaceId: me.workspace_id,
+        route: 'transcribe',
+        inputTokens: usedInputTokens,
+        outputTokens: usedOutputTokens,
+        audioInput: true,
+      })
+    }
   }
 }

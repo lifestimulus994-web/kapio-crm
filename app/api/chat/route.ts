@@ -10,6 +10,7 @@ import {
 } from '@/lib/crm-ai'
 import { parseGeorgianSchedule } from '@/lib/gschedule'
 import { getCurrentMember, hasElevatedAccess } from '@/lib/auth'
+import { checkAiBudget, logAiUsage, budgetExceededMessage } from '@/lib/ai-usage'
 
 export const dynamic = 'force-dynamic'
 
@@ -77,6 +78,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Message is required.' }, { status: 400 })
   }
   const history = (body.history ?? []).slice(-10)
+
+  const budget = await checkAiBudget(me.workspace_id, me.workspace_plan)
+  if (!budget.allowed) {
+    return NextResponse.json({ error: budgetExceededMessage(budget) }, { status: 402 })
+  }
+
+  let usedInputTokens = 0
+  let usedOutputTokens = 0
 
   try {
     // Local date (the server runs in the CRM's timezone) so "today/tomorrow"
@@ -279,11 +288,14 @@ Guidelines:
     async function generate(reqContents: GeminiContent[], force = false) {
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         try {
-          return await ai.models.generateContent({
+          const res = await ai.models.generateContent({
             model: MODEL,
             contents: reqContents,
             config: force ? forceConfig : config,
           })
+          usedInputTokens += res.usageMetadata?.promptTokenCount ?? 0
+          usedOutputTokens += res.usageMetadata?.candidatesTokenCount ?? 0
+          return res
         } catch (e) {
           if (!isOverloaded(e) || attempt === MAX_ATTEMPTS - 1) throw e
           await new Promise((r) => setTimeout(r, 500 * 2 ** attempt))
@@ -380,5 +392,17 @@ Guidelines:
       )
     }
     return NextResponse.json({ error: raw }, { status: 500 })
+  } finally {
+    // Log whatever was actually spent, even on a failed/partial turn — a
+    // round that errored out after a few successful generate() calls still
+    // cost real tokens.
+    if (usedInputTokens > 0 || usedOutputTokens > 0) {
+      await logAiUsage({
+        workspaceId: me.workspace_id,
+        route: 'chat',
+        inputTokens: usedInputTokens,
+        outputTokens: usedOutputTokens,
+      })
+    }
   }
 }
