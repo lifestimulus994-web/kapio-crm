@@ -224,11 +224,14 @@ ${context}`
 
     const executed: { name: string; result: Record<string, unknown> }[] = []
 
-    // Single model with retry on transient 503 overloads (no quality fallback).
+    // Single model with retry on transient 503 overloads and 429 rate-limit
+    // hits (no quality fallback). The 429/minute limit resets every minute
+    // and is shared across the whole workspace/API key, so a short burst of
+    // concurrent users often clears within a couple of retries.
     const MODEL = 'gemini-2.5-flash'
     const MAX_ATTEMPTS = 4
     const isOverloaded = (e: unknown) =>
-      /503|UNAVAILABLE|overloaded|high demand/i.test(
+      /503|UNAVAILABLE|overloaded|high demand|429|RESOURCE_EXHAUSTED|rate.?limit/i.test(
         e instanceof Error ? e.message : String(e)
       )
 

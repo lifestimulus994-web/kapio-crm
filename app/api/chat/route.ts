@@ -292,10 +292,14 @@ Guidelines:
     // Keep a single model — never degrade to a weaker one. On a 503/overload,
     // retry the SAME model with exponential backoff. If it is still busy after
     // every attempt, the error bubbles up and the user gets a "busy" message.
+    // Also retries a 429 (per-minute rate limit) the same way — that limit
+    // resets every minute, shared across the whole workspace/API key, so a
+    // short burst of concurrent users often clears within a couple of
+    // retries instead of failing the first request outright.
     const MODEL = 'gemini-2.5-flash'
     const MAX_ATTEMPTS = 4
     const isOverloaded = (e: unknown) =>
-      /503|UNAVAILABLE|overloaded|high demand/i.test(
+      /503|UNAVAILABLE|overloaded|high demand|429|RESOURCE_EXHAUSTED|rate.?limit/i.test(
         e instanceof Error ? e.message : String(e)
       )
 

@@ -62,8 +62,11 @@ export async function POST(req: Request) {
   try {
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
 
+    // Retries transient 503 overloads and 429 per-minute rate-limit hits —
+    // that limit resets every minute, so a short burst of concurrent users
+    // often clears within a couple of retries.
     const isOverloaded = (e: unknown) =>
-      /503|UNAVAILABLE|overloaded|high demand/i.test(
+      /503|UNAVAILABLE|overloaded|high demand|429|RESOURCE_EXHAUSTED|rate.?limit/i.test(
         e instanceof Error ? e.message : String(e)
       )
 
