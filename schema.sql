@@ -284,10 +284,10 @@ create index if not exists idx_leads_workspace on public.leads(workspace_id);
 
 -- ============================================================================
 -- 5. JOB BOARD SIGNALS
--- Public, workspace-independent cache of sales/business-development vacancies
--- pulled daily from jobs.ge and hr.ge (app/api/cron/job-boards). A company
--- hiring for sales roles is a lead-gen signal — the AI agent's get_job_postings
--- tool queries this so "when did company X post a vacancy" has a real answer.
+-- Public, workspace-independent cache of EVERY vacancy pulled daily from
+-- jobs.ge and hr.ge (app/api/cron/job-boards), any role. A company posting
+-- new vacancies is a lead-gen signal — the AI agent's get_job_postings tool
+-- queries this so "when did company X post a vacancy" has a real answer.
 -- Not scoped by workspace_id: it's public labor-market data, same for every
 -- tenant, so it is fetched once and shared rather than duplicated per workspace.
 -- ============================================================================
@@ -307,11 +307,10 @@ create index if not exists idx_job_postings_company on public.job_postings(compa
 create index if not exists idx_job_postings_posted  on public.job_postings(posted_at desc);
 
 -- hr.ge has no bulk search API — syncing walks its sitemap's announcement ids
--- newest-first and stops once it reaches an id already CHECKED (whether or
--- not that one matched the sales-keyword filter). This tracks that
--- "checked up to" watermark separately from job_postings, which only holds
--- actual matches — otherwise every non-matching id would be re-fetched on
--- every single sync, forever, since it would never appear in job_postings.
+-- newest-first and stops once it reaches an id already CHECKED. This tracks
+-- that watermark separately from job_postings so a sync failure partway
+-- through (a single bad announcement fetch) doesn't cause the same ids to
+-- be re-fetched on every subsequent run.
 create table if not exists public.job_sync_state (
   source  text primary key,
   last_id bigint not null default 0

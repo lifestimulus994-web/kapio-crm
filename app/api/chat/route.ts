@@ -270,10 +270,10 @@ Guidelines:
 - WORKSPACE / AI USAGE: the snapshot's "workspace" object has this workspace's
   name/plan/status. Call get_ai_usage when asked about AI cost, spend, or budget.
 - JOB POSTINGS (hiring signals): call get_job_postings when asked when a company
-  posted a vacancy, which companies are hiring salespeople, or similar — it
-  searches a daily-synced cache of sales/business-development vacancies from
-  jobs.ge and hr.ge. Report the source, company, title, and date plainly; if
-  nothing is found, say so instead of guessing.
+  posted a vacancy, what roles a company is hiring for, or similar — it
+  searches a daily-synced cache of every vacancy posted on jobs.ge and hr.ge
+  (any role, any company). Report the source, company, title, and date
+  plainly; if nothing is found, say so instead of guessing.
 - Never search for or store passwords or private credentials — those are not
   publicly available and must never be guessed.
 - After a tool runs, briefly confirm what changed. Never claim you changed

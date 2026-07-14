@@ -1015,7 +1015,7 @@ export const tools: FunctionDeclaration[] = [
   {
     name: 'get_job_postings',
     description:
-      "Look up sales/business-development job vacancies posted on jobs.ge and hr.ge (synced daily) — use this whenever asked when a company posted a vacancy, which companies are hiring salespeople, or similar hiring-signal questions. A company posting sales roles is a lead-gen signal (they're growing / need more sales capacity). This is public labor-market data, not tied to any one company's CRM records.",
+      "Look up job vacancies (any role) posted on jobs.ge and hr.ge (synced daily) — use this whenever asked when a company posted a vacancy, what roles a company is hiring for, or similar hiring-signal questions. A company posting new vacancies is a lead-gen signal (they're growing / hiring). This is public labor-market data, not tied to any one company's CRM records.",
     parameters: {
       type: Type.OBJECT,
       properties: {

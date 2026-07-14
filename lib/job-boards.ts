@@ -1,26 +1,29 @@
 import { supabase } from '@/lib/supabase'
 
 // ---------- shared ----------
-// Sales/business-development vacancies only (per Daviti's explicit choice) —
-// everything else on jobs.ge/hr.ge is noise for a CRM/sales-training business.
-// Matched case-insensitively against the vacancy title (+ hr.ge's description).
-const SALES_KEYWORDS = [
-  'გაყიდვ', // გაყიდვები / გაყიდვების (Georgian: sales)
-  'სავაჭრო',
-  'დისტრიბუტორ',
-  'მენეჯერი გაყიდვ',
-  'საკონტაქტო ცენტრ',
-  'sales',
-  'account manager',
-  'business development',
-  'call center',
-  'call-center',
-  'callcenter',
-]
+// ALL vacancies from both sites — no keyword/category filter. The AI's
+// get_job_postings tool can still be asked about a specific role or company;
+// narrowing happens at query time, not at sync time.
 
-function matchesSalesKeyword(text: string): boolean {
-  const t = text.toLowerCase()
-  return SALES_KEYWORDS.some((k) => t.includes(k.toLowerCase()))
+// Runs `items` through `worker` with at most `concurrency` in flight at
+// once — hr.ge has no bulk endpoint, so covering a full day's volume (a few
+// hundred ids) inside Vercel's function time limit means overlapping
+// requests instead of one-at-a-time.
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length)
+  let next = 0
+  async function run() {
+    while (next < items.length) {
+      const i = next++
+      results[i] = await worker(items[i])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, run))
+  return results
 }
 
 function decodeEntities(s: string): string {
@@ -93,12 +96,13 @@ function parseJobsGeDate(text: string): string | null {
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
 }
 
-// cid=2 is jobs.ge's own "გაყიდვები" (Sales) category — narrows the fetch to
-// relevant listings before the keyword filter is even applied.
-const JOBS_GE_SALES_CATEGORY_URL = 'https://jobs.ge/?cid=2'
+// No cid param = every category on one page (jobs.ge doesn't paginate this
+// view — see the dead infinite-scroll JS in its own markup, loaded_page<0
+// is never true, so the initial render already has everything live).
+const JOBS_GE_ALL_URL = 'https://jobs.ge/'
 
 export async function syncJobsGe(): Promise<{ found: number; saved: number }> {
-  const res = await fetch(JOBS_GE_SALES_CATEGORY_URL, {
+  const res = await fetch(JOBS_GE_ALL_URL, {
     headers: { 'User-Agent': 'Mozilla/5.0 (compatible; KapioCRM/1.0)' },
   })
   if (!res.ok) throw new Error(`jobs.ge fetch failed: ${res.status}`)
@@ -117,7 +121,6 @@ export async function syncJobsGe(): Promise<{ found: number; saved: number }> {
     )
     if (!titleMatch) continue
     const title = decodeEntities(titleMatch[1])
-    if (!matchesSalesKeyword(title)) continue
 
     // Two <a view=client> links per row (logo icon, then the name as text) —
     // the icon one has no text between its tags, so the first non-empty
@@ -148,22 +151,18 @@ export async function syncJobsGe(): Promise<{ found: number; saved: number }> {
 // ---------- hr.ge ----------
 // No documented public search API — instead: walk the sitemap (newest
 // /announcement/{id}/{slug} first, ids are roughly sequential), stop at the
-// first id we've already stored, and fetch each NEW id's own detail JSON
-// (a real, working endpoint) to check its title for a sales-keyword match.
-// Bounded by MAX_NEW_PER_SYNC so a first-ever run (nothing stored yet)
-// cannot fire hundreds of requests at once.
+// first id we've already checked, and fetch each NEW id's own detail JSON
+// (a real, working endpoint). Every one found is saved — no keyword filter.
+// Fetched with bounded concurrency (not one-at-a-time): measured ~0.6-0.7s
+// per detail request, and hr.ge posts ~150-200 new listings/day site-wide,
+// which a sequential loop can't cover inside Vercel's 60s function ceiling.
 const HR_GE_SITEMAP_URL = 'https://api.p.hr.ge/public-portal/tenant/1/api/v3/seo/sitemap'
 const HR_GE_ANNOUNCEMENT_API = (id: string) =>
   `https://api.p.hr.ge/public-portal/tenant/1/api/v3/announcement/${id}`
-// hr.ge posts roughly 150-200 new listings/day site-wide (all categories) —
-// bounds both a day's normal volume and a first-ever run (nothing checked
-// yet) to a request count that fits the cron function's time budget.
-// Measured ~0.6-0.7s per hr.ge detail request in practice (not the ~0.3s
-// guessed originally) — a production run at 120 actually timed out against
-// Vercel's 60s ceiling. 60 is a safe margin; any backlog beyond that just
-// gets picked up on the next day's run since the watermark only advances to
-// what was actually checked.
-const MAX_NEW_PER_SYNC = 60
+// Comfortably above the ~150-200/day estimate, so the watermark keeps up
+// with real volume instead of permanently lagging behind it.
+const MAX_NEW_PER_SYNC = 350
+const HR_GE_CONCURRENCY = 12
 
 // "Checked up to" watermark — see the job_sync_state comment in schema.sql
 // for why this must track every id CHECKED, not just the ones that matched.
@@ -196,16 +195,12 @@ export async function syncHrGe(): Promise<{ found: number; saved: number }> {
   const lastChecked = await getLastCheckedHrGeId()
   const candidateIds = ids.filter((id) => id > lastChecked).slice(0, MAX_NEW_PER_SYNC)
 
-  const postings: FoundPosting[] = []
-  for (const id of candidateIds) {
+  const results = await mapWithConcurrency(candidateIds, HR_GE_CONCURRENCY, async (id) => {
     try {
-      // Sequential with a small gap — polite to hr.ge's API, and avoids
-      // looking like a burst of automated traffic.
-      await new Promise((r) => setTimeout(r, 40))
       const detailRes = await fetch(HR_GE_ANNOUNCEMENT_API(String(id)), {
         headers: { 'User-Agent': 'Mozilla/5.0 (compatible; KapioCRM/1.0)', Accept: 'application/json' },
       })
-      if (!detailRes.ok) continue
+      if (!detailRes.ok) return null
       const data = (await detailRes.json()) as {
         data?: {
           announcement?: {
@@ -216,21 +211,22 @@ export async function syncHrGe(): Promise<{ found: number; saved: number }> {
         }
       }
       const a = data.data?.announcement
-      if (!a?.title) continue
-      if (!matchesSalesKeyword(a.title)) continue
-      postings.push({
+      if (!a?.title) return null
+      const posting: FoundPosting = {
         source: 'hr.ge',
         externalId: String(id),
         companyName: a.customerName || 'უცნობი კომპანია',
         title: a.title,
         postedAt: a.publishDate ? a.publishDate.slice(0, 10) : null,
         url: `https://www.hr.ge/announcement/${id}`,
-      })
+      }
+      return posting
     } catch {
       // One bad announcement shouldn't stop the rest of the sync.
-      continue
+      return null
     }
-  }
+  })
+  const postings = results.filter((p): p is FoundPosting => p !== null)
 
   const saved = await upsertPostings(postings)
   // Advance the watermark to the highest id actually CHECKED this run (not
