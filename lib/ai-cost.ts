@@ -8,24 +8,29 @@ const PRICE_PER_MILLION = {
   audioInput: 1.0,
   output: 2.5, // includes "thinking" output tokens
 }
-// Google Search grounding: 1,500 requests/day free, then $35 per 1,000
-// grounded prompts. We don't track the free daily allotment per workspace
-// (would need its own reset-at-midnight counter), so this slightly
-// overcounts for light users — a conservative bias, appropriate for a spend
-// guard.
+// Google Search grounding: the first 1,500 grounded prompts EACH DAY are
+// free (shared across the whole Google Cloud project — i.e. across every
+// workspace in this app, since they all call through the same API key),
+// then $35 per 1,000 after that. Pass how many grounded calls have already
+// happened today (project-wide, see getGroundedCallsToday in ai-usage.ts)
+// so a light user's lookups land in the free allotment instead of always
+// being charged the worst-case per-call rate.
 const GROUNDED_PROMPT_COST = 35 / 1000
+const FREE_GROUNDED_PER_DAY = 1500
+
+export function groundingCostUsd(priorGroundedCallsToday: number): number {
+  return priorGroundedCallsToday < FREE_GROUNDED_PER_DAY ? 0 : GROUNDED_PROMPT_COST
+}
 
 export function estimateCostUsd(usage: {
   inputTokens: number
   outputTokens: number
   audioInput?: boolean
-  grounded?: boolean
 }): number {
   const inputRate = usage.audioInput
     ? PRICE_PER_MILLION.audioInput
     : PRICE_PER_MILLION.textInput
   const inputCost = (usage.inputTokens / 1_000_000) * inputRate
   const outputCost = (usage.outputTokens / 1_000_000) * PRICE_PER_MILLION.output
-  const groundingCost = usage.grounded ? GROUNDED_PROMPT_COST : 0
-  return inputCost + outputCost + groundingCost
+  return inputCost + outputCost
 }

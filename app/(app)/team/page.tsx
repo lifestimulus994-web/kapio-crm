@@ -44,8 +44,7 @@ export default async function TeamPage() {
         <div className="mb-1.5 flex items-center justify-between text-xs">
           <span className="text-slate-400">AI გამოყენება (ამ თვეში)</span>
           <span className="font-medium text-slate-300">
-            ${aiUsedUsd.toFixed(2)}
-            {aiLimitUsd !== null ? ` / $${aiLimitUsd}` : ' · ულიმიტო'}
+            {aiLimitUsd !== null ? `${aiUsagePct.toFixed(0)}%` : 'ულიმიტო'}
           </span>
         </div>
         {aiLimitUsd !== null && (

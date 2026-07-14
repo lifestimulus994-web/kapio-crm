@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase'
-import { estimateCostUsd } from '@/lib/ai-cost'
+import { estimateCostUsd, groundingCostUsd } from '@/lib/ai-cost'
 
 // Monthly AI spend cap per plan, in USD. null = no automatic cap (Pro is
 // negotiated directly, not enforced here).
@@ -14,6 +14,27 @@ function startOfMonthIso(): string {
   d.setUTCDate(1)
   d.setUTCHours(0, 0, 0, 0)
   return d.toISOString()
+}
+
+// Georgia runs UTC+4, no DST — build "today" against the business's actual
+// day boundary, not the server's (UTC on Vercel).
+function startOfTodayTbilisiIso(): string {
+  const todayInTbilisi = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Tbilisi',
+  }).format(new Date())
+  return new Date(`${todayInTbilisi}T00:00:00+04:00`).toISOString()
+}
+
+// How many grounded (Google Search) calls have already happened TODAY,
+// across every workspace — Google's 1,500/day free grounding allotment is
+// shared per API key/project, not per tenant.
+async function getGroundedCallsToday(): Promise<number> {
+  const { count } = await supabase
+    .from('ai_usage')
+    .select('id', { count: 'exact', head: true })
+    .eq('grounded', true)
+    .gte('created_at', startOfTodayTbilisiIso())
+  return count ?? 0
 }
 
 export async function getMonthlyUsageUsd(workspaceId: string): Promise<number> {
@@ -55,7 +76,11 @@ export async function logAiUsage(params: {
   grounded?: boolean
 }): Promise<void> {
   try {
-    const cost_usd = estimateCostUsd(params)
+    const tokenCost = estimateCostUsd(params)
+    const groundingCost = params.grounded
+      ? groundingCostUsd(await getGroundedCallsToday())
+      : 0
+    const cost_usd = tokenCost + groundingCost
     await supabase.from('ai_usage').insert({
       workspace_id: params.workspaceId,
       route: params.route,
