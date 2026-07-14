@@ -1013,6 +1013,28 @@ export const tools: FunctionDeclaration[] = [
     parameters: { type: Type.OBJECT, properties: {} },
   },
   {
+    name: 'get_job_postings',
+    description:
+      "Look up sales/business-development job vacancies posted on jobs.ge and hr.ge (synced daily) — use this whenever asked when a company posted a vacancy, which companies are hiring salespeople, or similar hiring-signal questions. A company posting sales roles is a lead-gen signal (they're growing / need more sales capacity). This is public labor-market data, not tied to any one company's CRM records.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        company_name: {
+          type: Type.STRING,
+          description: 'Filter to postings from a specific company (partial match). Omit to see all recent postings.',
+        },
+        since_date: {
+          type: Type.STRING,
+          description: 'Only postings on or after this date, YYYY-MM-DD. Omit for no lower bound.',
+        },
+        limit: {
+          type: Type.NUMBER,
+          description: 'Max results to return, default 20.',
+        },
+      },
+    },
+  },
+  {
     name: 'invite_member',
     description:
       "Invite a new teammate to this workspace by creating their login (email + password), as 'manager' or 'member' role. OWNER ONLY. The invited person still needs the Kapio super-admin's manual approval before they can use the CRM — inviting them does not grant access by itself, it only creates the pending account, same as the Team page's own invite form.",
@@ -1903,6 +1925,22 @@ async function runToolInner(
       limit_usd: limitUsd,
       unlimited: limitUsd === null,
     }
+  }
+
+  if (name === 'get_job_postings') {
+    let q = supabase
+      .from('job_postings')
+      .select('source, company_name, title, posted_at, url')
+      .order('posted_at', { ascending: false, nullsFirst: false })
+    const company = str(args.company_name)
+    if (company) q = q.ilike('company_name', `%${company}%`)
+    const since = str(args.since_date)
+    if (since) q = q.gte('posted_at', since)
+    const limit = num(args.limit)
+    q = q.limit(limit > 0 ? Math.min(limit, 100) : 20)
+    const { data, error } = await q
+    if (error) return { success: false, error: error.message }
+    return { success: true, postings: data ?? [] }
   }
 
   if (name === 'invite_member') {

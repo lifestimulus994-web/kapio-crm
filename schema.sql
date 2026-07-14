@@ -10,10 +10,11 @@
 --   2. Core CRM tables          — organizations, contacts, opportunities, tasks
 --   3. Comments / activity feed — one comment table per core entity
 --   4. Leads                    — funnel-entry, separate from organizations
---   5. Diagnostics              — AI tool-failure log + per-workspace AI usage/cost
---   6. Grants                   — Supabase API role access
---   7. Auth trigger             — auto-provisions a workspace at signup
---   8. ONE-TIME MANUAL BACKFILL — commented out; multi-tenant AND approval-gate
+--   5. Job board signals        — jobs.ge / hr.ge vacancy cache, AI-queryable
+--   6. Diagnostics              — AI tool-failure log + per-workspace AI usage/cost
+--   7. Grants                   — Supabase API role access
+--   8. Auth trigger             — auto-provisions a workspace at signup
+--   9. ONE-TIME MANUAL BACKFILL — commented out; multi-tenant AND approval-gate
 --                                  backfills (run each once, see comments)
 -- ============================================================================
 
@@ -282,7 +283,43 @@ create index if not exists idx_leads_workspace on public.leads(workspace_id);
 
 
 -- ============================================================================
--- 5. DIAGNOSTICS
+-- 5. JOB BOARD SIGNALS
+-- Public, workspace-independent cache of sales/business-development vacancies
+-- pulled daily from jobs.ge and hr.ge (app/api/cron/job-boards). A company
+-- hiring for sales roles is a lead-gen signal — the AI agent's get_job_postings
+-- tool queries this so "when did company X post a vacancy" has a real answer.
+-- Not scoped by workspace_id: it's public labor-market data, same for every
+-- tenant, so it is fetched once and shared rather than duplicated per workspace.
+-- ============================================================================
+
+create table if not exists public.job_postings (
+  id           uuid primary key default gen_random_uuid(),
+  source       text not null,        -- 'jobs.ge' | 'hr.ge'
+  external_id  text not null,        -- the source site's own vacancy id (de-dup key)
+  company_name text not null,
+  title        text not null,
+  posted_at    date,
+  url          text,
+  created_at   timestamptz not null default now(),
+  unique (source, external_id)
+);
+create index if not exists idx_job_postings_company on public.job_postings(company_name);
+create index if not exists idx_job_postings_posted  on public.job_postings(posted_at desc);
+
+-- hr.ge has no bulk search API — syncing walks its sitemap's announcement ids
+-- newest-first and stops once it reaches an id already CHECKED (whether or
+-- not that one matched the sales-keyword filter). This tracks that
+-- "checked up to" watermark separately from job_postings, which only holds
+-- actual matches — otherwise every non-matching id would be re-fetched on
+-- every single sync, forever, since it would never appear in job_postings.
+create table if not exists public.job_sync_state (
+  source  text primary key,
+  last_id bigint not null default 0
+);
+
+
+-- ============================================================================
+-- 6. DIAGNOSTICS
 -- Logs unexpected AI tool-call failures (not ordinary "not found" results,
 -- which the tool already returns as a normal {success:false} value) so they
 -- can be reviewed later without relying on short-lived platform logs. Also
@@ -318,7 +355,7 @@ create index if not exists idx_ai_usage_workspace_created on public.ai_usage(wor
 
 
 -- ============================================================================
--- 6. GRANTS
+-- 7. GRANTS
 -- Supabase sets sane defaults, but be explicit about API role access.
 -- ============================================================================
 
@@ -326,7 +363,7 @@ grant all on all tables in schema public to anon, authenticated, service_role;
 
 
 -- ============================================================================
--- 7. AUTH TRIGGER
+-- 8. AUTH TRIGGER
 -- Auto-provisions a member row for every NEW auth.users row — both paths:
 --   - Self-signup (supabase.auth.signUp, the public /signup form): gets a
 --     BRAND NEW workspace, role 'owner'. Identified by the ABSENCE of
@@ -393,7 +430,7 @@ create trigger on_auth_user_created
 
 
 -- ============================================================================
--- 8. ONE-TIME MANUAL BACKFILL — commented out, run by hand, once
+-- 9. ONE-TIME MANUAL BACKFILL — commented out, run by hand, once
 -- Only needed if this database had data BEFORE multi-tenancy was added
 -- (i.e. rows with a null workspace_id). Creates one "Kapio" workspace and
 -- backfills every existing row + your own member row into it. Safe to
