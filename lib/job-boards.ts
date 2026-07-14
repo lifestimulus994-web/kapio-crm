@@ -158,7 +158,12 @@ const HR_GE_ANNOUNCEMENT_API = (id: string) =>
 // hr.ge posts roughly 150-200 new listings/day site-wide (all categories) —
 // bounds both a day's normal volume and a first-ever run (nothing checked
 // yet) to a request count that fits the cron function's time budget.
-const MAX_NEW_PER_SYNC = 120
+// Measured ~0.6-0.7s per hr.ge detail request in practice (not the ~0.3s
+// guessed originally) — a production run at 120 actually timed out against
+// Vercel's 60s ceiling. 60 is a safe margin; any backlog beyond that just
+// gets picked up on the next day's run since the watermark only advances to
+// what was actually checked.
+const MAX_NEW_PER_SYNC = 60
 
 // "Checked up to" watermark — see the job_sync_state comment in schema.sql
 // for why this must track every id CHECKED, not just the ones that matched.
@@ -196,7 +201,7 @@ export async function syncHrGe(): Promise<{ found: number; saved: number }> {
     try {
       // Sequential with a small gap — polite to hr.ge's API, and avoids
       // looking like a burst of automated traffic.
-      await new Promise((r) => setTimeout(r, 80))
+      await new Promise((r) => setTimeout(r, 40))
       const detailRes = await fetch(HR_GE_ANNOUNCEMENT_API(String(id)), {
         headers: { 'User-Agent': 'Mozilla/5.0 (compatible; KapioCRM/1.0)', Accept: 'application/json' },
       })
