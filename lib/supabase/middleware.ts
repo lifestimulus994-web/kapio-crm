@@ -28,9 +28,15 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser()
 
   // '/' is the public marketing page; /login and /signup are public auth
-  // forms. Everything else requires a session.
+  // forms. Everything else requires a session — EXCEPT /api/cron/*, which
+  // Vercel's scheduler calls with no browser session at all (it authorizes
+  // itself via a CRON_SECRET Bearer token checked inside the route handler,
+  // not a cookie); without this exemption every cron request gets redirected
+  // to /login before the route ever runs.
   const publicPaths = new Set(['/', '/login', '/signup'])
-  const isPublicPath = publicPaths.has(request.nextUrl.pathname)
+  const isPublicPath =
+    publicPaths.has(request.nextUrl.pathname) ||
+    request.nextUrl.pathname.startsWith('/api/cron/')
   const isAuthPage =
     request.nextUrl.pathname === '/login' || request.nextUrl.pathname === '/signup'
 
