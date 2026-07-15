@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
@@ -78,6 +78,13 @@ export default function TaskCalendar({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [preview, setPreview] = useState<Preview | null>(null)
+  // Optimistic overrides, keyed by task id, applied over the server-provided
+  // tasks. A drag/resize/edit shows its result INSTANTLY; without this the
+  // event snapped back to its old spot after the ghost cleared and only
+  // jumped to the new one seconds later, once router.refresh() delivered
+  // fresh props. A failed save rolls its patch back; a successful refresh
+  // makes the patch redundant and the effect below drops it.
+  const [patches, setPatches] = useState<Record<string, Partial<Task>>>({})
 
   const contentRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ moved: boolean } | null>(null)
@@ -90,17 +97,60 @@ export default function TaskCalendar({
     [weekStart]
   )
 
+  const effectiveTasks = useMemo(
+    () => tasks.map((t) => (patches[t.id] ? { ...t, ...patches[t.id] } : t)),
+    [tasks, patches]
+  )
+
+  // Drop a patch once the refreshed server data already carries its values —
+  // from then on the server is the source of truth again, so edits made
+  // elsewhere (task page, AI agent) aren't pinned under a stale override.
+  useEffect(() => {
+    const same = (a: unknown, b: unknown) => {
+      if (a === b || (a == null && b == null)) return true
+      if (typeof a === 'string' && typeof b === 'string') {
+        // Timestamps may differ only in serialization (Z vs +00:00).
+        const da = Date.parse(a)
+        return !Number.isNaN(da) && da === Date.parse(b)
+      }
+      return false
+    }
+    setPatches((prev) => {
+      const next = { ...prev }
+      let changed = false
+      for (const t of tasks) {
+        const p = next[t.id]
+        if (
+          p &&
+          Object.entries(p).every(([k, v]) => same(t[k as keyof Task], v))
+        ) {
+          delete next[t.id]
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [tasks])
+
+  function rollbackPatch(id: string) {
+    setPatches((prev) => {
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+  }
+
   // Split tasks into all-day and timed, each tagged with its schedule.
   const scheduled = useMemo(
     () =>
-      tasks
+      effectiveTasks
         .map((t) => ({ t, s: taskSched(t) }))
         .filter((x): x is { t: Task; s: NonNullable<ReturnType<typeof taskSched>> } => x.s !== null),
-    [tasks]
+    [effectiveTasks]
   )
   const unscheduled = useMemo(
-    () => tasks.filter((t) => taskSched(t) === null),
-    [tasks]
+    () => effectiveTasks.filter((t) => taskSched(t) === null),
+    [effectiveTasks]
   )
 
   const weekLabel = `${days[0].toLocaleDateString('en-US', {
@@ -218,10 +268,6 @@ export default function TaskCalendar({
         openEditorForTask(task) // a click, not a drag → edit
         return
       }
-      // Keep the ghost preview showing the dropped position until save()
-      // resolves - clearing it early made the event visibly snap back to its
-      // old spot for the duration of the round trip, then jump again once
-      // router.refresh() landed.
       const base = days[p.dayIndex]
       const startAt = new Date(base)
       startAt.setHours(0, 0, 0, 0)
@@ -229,15 +275,20 @@ export default function TaskCalendar({
       const endAt = new Date(base)
       endAt.setHours(0, 0, 0, 0)
       endAt.setMinutes(p.endMin)
-      await save({
-        id: task.id,
+      const patch = {
         start_at: startAt.toISOString(),
         end_at: endAt.toISOString(),
         start_date: ymd(startAt),
         due_date: ymd(endAt),
-      })
+      }
+      // Show the drop result instantly via an optimistic patch; the save runs
+      // behind it and only a FAILURE moves the event back (with the error
+      // banner explaining why).
+      setPatches((prev) => ({ ...prev, [task.id]: patch }))
       previewRef.current = null
       setPreview(null)
+      const ok = await save({ id: task.id, ...patch })
+      if (!ok) rollbackPatch(task.id)
     }
 
     window.addEventListener('pointermove', move)
@@ -299,20 +350,26 @@ export default function TaskCalendar({
       payload.start_date = ymd(start)
       payload.due_date = ymd(end)
     }
+    // Editing an existing task: reflect the changes instantly, roll back on a
+    // failed save. (A brand-new task has no id to patch — it appears on
+    // refresh.)
+    if (draft.id) {
+      const { id: _ignored, ...fields } = payload
+      setPatches((prev) => ({ ...prev, [draft.id!]: fields as Partial<Task> }))
+    }
     const ok = await save(payload)
+    if (!ok && draft.id) rollbackPatch(draft.id)
     if (ok) setDraft(null)
   }
 
   async function unschedule() {
     if (!draft?.id) return
+    const id = draft.id
     // Remove it from the calendar entirely → back to the Unscheduled list.
-    const ok = await save({
-      id: draft.id,
-      start_at: null,
-      end_at: null,
-      start_date: null,
-      due_date: null,
-    })
+    const patch = { start_at: null, end_at: null, start_date: null, due_date: null }
+    setPatches((prev) => ({ ...prev, [id]: patch }))
+    const ok = await save({ id, ...patch })
+    if (!ok) rollbackPatch(id)
     if (ok) setDraft(null)
   }
 
