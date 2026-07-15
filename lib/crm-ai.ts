@@ -314,6 +314,125 @@ private credentials.`
   }
 }
 
+// ---------- lead generation (Google Search grounding) ----------
+// Discovery search: finds MULTIPLE companies matching a description (industry +
+// location) — unlike findCompanyContacts, which enriches ONE already-known
+// company. Everything returned is web-sourced best-effort; the caller must
+// flag it unverified.
+export type FoundLead = {
+  name: string
+  phone: string
+  email: string
+  website: string
+  address: string
+  note: string
+}
+
+export async function findLeadsOnGoogle(
+  query: string,
+  count: number,
+  workspaceId: string
+): Promise<{ leads: FoundLead[]; sources: string[] }> {
+  if (!query?.trim() || !process.env.GEMINI_API_KEY)
+    return { leads: [], sources: [] }
+
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
+  const n = Math.min(Math.max(Math.round(count) || 10, 1), 25)
+  const prompt = `Find ${n} REAL, currently-operating businesses matching this
+description: "${query}".
+
+Search Google properly: business directories, Google Maps / Google Business
+listings, each company's own website and Facebook/Instagram business page, and
+(for Georgian queries) local Georgian directories. Only include companies you
+actually found in the search results — do NOT invent, guess, or pad the list
+with made-up entries. Fewer real companies is better than ${n} with fakes.
+
+For each company collect its PUBLIC contact details: phone, general contact
+email (info@/contact@/sales@), website, address (city + street if listed).
+Use an empty string for a field that genuinely is not publicly listed.
+
+Return ONLY a JSON array, no prose, in this exact shape:
+[{"name": "", "phone": "", "email": "", "website": "", "address": "", "note": ""}]
+- "name": the company's correct public name.
+- "note": one short line — what the company does / why it matches the query.
+Never return passwords or private credentials.`
+
+  const isOverloaded = (e: unknown) =>
+    /503|UNAVAILABLE|overloaded|high demand/i.test(
+      e instanceof Error ? e.message : String(e)
+    )
+
+  try {
+    let res
+    for (let attempt = 0; ; attempt++) {
+      try {
+        res = await ai.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: prompt,
+          // Google Search grounding. (Cannot be combined with
+          // functionDeclarations, which is why this is a standalone call.)
+          config: { tools: [{ googleSearch: {} }] },
+        })
+        break
+      } catch (e) {
+        if (!isOverloaded(e) || attempt === 3) throw e
+        await new Promise((r) => setTimeout(r, 600 * 2 ** attempt))
+      }
+    }
+
+    await logAiUsage({
+      workspaceId,
+      route: 'lead_gen',
+      inputTokens: res.usageMetadata?.promptTokenCount ?? 0,
+      outputTokens: res.usageMetadata?.candidatesTokenCount ?? 0,
+      grounded: true,
+    })
+
+    const text = res.text ?? ''
+    const match = text.match(/\[[\s\S]*\]/)
+    let parsed: Partial<FoundLead>[] = []
+    if (match) {
+      try {
+        const arr = JSON.parse(match[0])
+        if (Array.isArray(arr)) parsed = arr
+      } catch {
+        parsed = []
+      }
+    }
+
+    const leads: FoundLead[] = parsed
+      .filter((l) => typeof l?.name === 'string' && l.name.trim())
+      .slice(0, n)
+      .map((l) => ({
+        name: (l.name ?? '').trim(),
+        phone: (l.phone ?? '').trim(),
+        email: (l.email ?? '').trim(),
+        website: (l.website ?? '').trim(),
+        address: (l.address ?? '').trim(),
+        note: (l.note ?? '').trim(),
+      }))
+
+    // Real source URLs Google Search used for grounding.
+    const chunks =
+      (
+        res.candidates?.[0]?.groundingMetadata as
+          | { groundingChunks?: { web?: { uri?: string } }[] }
+          | undefined
+      )?.groundingChunks ?? []
+    const sources = Array.from(
+      new Set(
+        chunks
+          .map((c) => c.web?.uri)
+          .filter((u): u is string => typeof u === 'string')
+      )
+    ).slice(0, 5)
+
+    return { leads, sources }
+  } catch {
+    return { leads: [], sources: [] }
+  }
+}
+
 // ---------- helpers to resolve names -> ids (so we reuse existing records) ----------
 // All scoped to the caller's workspace_id (and, for a plain member, to their
 // own assigned_to) — a name/title match can never resolve to another
@@ -569,6 +688,26 @@ export const tools: FunctionDeclaration[] = [
         },
       },
       required: ['name'],
+    },
+  },
+  {
+    name: 'find_leads',
+    description:
+      'LEAD GENERATION — discover NEW potential client companies on the public web (Google Search). Give a description of the target businesses (type/industry + city or region, e.g. "უძრავი ქონების სააგენტოები თბილისში" or "car dealerships in Tbilisi") and how many to find. Returns a list of real companies with their best-effort public phone/email/website/address. Use whenever the user asks to find/search/collect companies, leads, or potential clients of some kind — this IS within your capabilities, never refuse such a request. All results are web-sourced and unverified. Different from find_company_contacts, which enriches ONE already-known company.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        query: {
+          type: Type.STRING,
+          description:
+            'What kind of businesses to find, including the location — e.g. "real estate agencies in Tbilisi", "სასტუმროები ბათუმში".',
+        },
+        count: {
+          type: Type.NUMBER,
+          description: 'How many companies to find (default 10, max 25).',
+        },
+      },
+      required: ['query'],
     },
   },
   {
@@ -1261,6 +1400,24 @@ async function runToolInner(
       note: anything
         ? `Two kinds of data here. From Georgia's official business registry (companyinfo.ge) — TRUSTED, no verification needed: legal_name, identification_code, registry_address. From general web search — best-effort, must be flagged unverified: official_name (display name), email, phone, website, address. Use official_name for the org's "name" field and legal_name for its "legal_name" field.${missing.length ? ` These fields were searched for but genuinely could not be found publicly: ${missing.join(', ')} — mention in your reply that these specifically were not found, don't just stay silent about them.` : ' All fields were found.'}`
         : 'Nothing reliable found for this company after an exhaustive search — mention in your reply that none of it could be found publicly.',
+    }
+  }
+
+  if (name === 'find_leads') {
+    const query = str(args.query)
+    if (!query) return { success: false, error: 'Search query is required.' }
+    const found = await findLeadsOnGoogle(query, num(args.count) || 10, workspaceId)
+    if (found.leads.length === 0)
+      return {
+        success: true,
+        leads: [],
+        note: 'No matching companies could be found on the web for this query — say so plainly and suggest rewording the search or widening the area. Do not invent companies yourself.',
+      }
+    return {
+      success: true,
+      leads: found.leads,
+      sources: found.sources,
+      note: `Found ${found.leads.length} companies via Google Search — ALL web-sourced and UNVERIFIED, say so. Present them as a numbered list with the details found (leave out fields that are empty). Then OFFER to save them as leads. If the user asks to save (now or upfront in the original request), call create_lead once per company: full_name = company name, company = company name, source = "AI ლიდგენერაცია", phone/email from the results, notes = note + address + "⚠️ ვებ-ძიებით ნაპოვნია — გადაამოწმე". Skip any company already present in the CRM snapshot.`,
     }
   }
 
