@@ -6,6 +6,9 @@ import { buildContext, loadKnowledge, tools, runTool, type AiScope } from '@/lib
 import { checkAiBudget, logAiUsage, budgetExceededMessage } from '@/lib/ai-usage'
 
 export const dynamic = 'force-dynamic'
+// AI outcome-logging chains model rounds + 503-retry backoff — won't fit the
+// platform default (~10s on Vercel).
+export const maxDuration = 60
 
 // Mark a task done and record how it actually ended.
 //  - mode 'done':   just mark it done.
@@ -162,7 +165,8 @@ ${context}`
           },
         },
       }
-      for (let attempt = 0; attempt < 4; attempt++) {
+      // 6 attempts ≈ up to ~15s of backoff — real 503 spikes outlive 4/~3.5s.
+      for (let attempt = 0; attempt < 6; attempt++) {
         try {
           const res = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
@@ -173,7 +177,7 @@ ${context}`
           usedOutputTokens += res.usageMetadata?.candidatesTokenCount ?? 0
           return res
         } catch (e) {
-          if (!isOverloaded(e) || attempt === 3) throw e
+          if (!isOverloaded(e) || attempt === 5) throw e
           await new Promise((r) => setTimeout(r, 500 * 2 ** attempt))
         }
       }

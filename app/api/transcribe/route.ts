@@ -4,6 +4,9 @@ import { getCurrentMember } from '@/lib/auth'
 import { checkAiBudget, logAiUsage, budgetExceededMessage } from '@/lib/ai-usage'
 
 export const dynamic = 'force-dynamic'
+// Audio transcription + 503-retry backoff won't fit the platform default
+// (~10s on Vercel) — that cut off as an opaque timeout.
+export const maxDuration = 60
 
 // Lightweight speech-to-text: takes a short audio clip and returns ONLY the
 // transcription. Used by the Ask-AI mic button (recorded with MediaRecorder).
@@ -71,7 +74,8 @@ export async function POST(req: Request) {
       )
 
     let response
-    for (let attempt = 0; attempt < 4; attempt++) {
+    // 6 attempts ≈ up to ~15s of backoff — real 503 spikes outlive 4/~3.5s.
+    for (let attempt = 0; attempt < 6; attempt++) {
       try {
         response = await ai.models.generateContent({
           model: 'gemini-2.5-flash',
@@ -91,7 +95,7 @@ export async function POST(req: Request) {
         usedOutputTokens += response.usageMetadata?.candidatesTokenCount ?? 0
         break
       } catch (e) {
-        if (!isOverloaded(e) || attempt === 3) throw e
+        if (!isOverloaded(e) || attempt === 5) throw e
         await new Promise((r) => setTimeout(r, 500 * 2 ** attempt))
       }
     }

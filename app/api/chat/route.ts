@@ -13,6 +13,10 @@ import { getCurrentMember, hasElevatedAccess } from '@/lib/auth'
 import { checkAiBudget, logAiUsage, budgetExceededMessage } from '@/lib/ai-usage'
 
 export const dynamic = 'force-dynamic'
+// A turn can chain several model rounds + tool calls (incl. grounded web
+// searches) and ride out 503-overload retries — the platform default (~10s
+// on Vercel) cut those off as opaque timeouts.
+export const maxDuration = 60
 
 type ChatMessage = { role: 'user' | 'model'; text: string }
 type PendingConfirmation = { name: string; args: Record<string, unknown>; description: string }
@@ -313,7 +317,10 @@ Guidelines:
     // short burst of concurrent users often clears within a couple of
     // retries instead of failing the first request outright.
     const MODEL = 'gemini-2.5-flash'
-    const MAX_ATTEMPTS = 4
+    // 6 attempts ≈ up to ~15s of backoff — real Gemini 503 spikes routinely
+    // outlive the previous 4-attempt/~3.5s window and surfaced as "AI is
+    // busy" errors to the user.
+    const MAX_ATTEMPTS = 6
     const isOverloaded = (e: unknown) =>
       /503|UNAVAILABLE|overloaded|high demand|429|RESOURCE_EXHAUSTED|rate.?limit/i.test(
         e instanceof Error ? e.message : String(e)

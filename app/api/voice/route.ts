@@ -6,6 +6,9 @@ import { parseGeorgianSchedule } from '@/lib/gschedule'
 import { checkAiBudget, logAiUsage, budgetExceededMessage } from '@/lib/ai-usage'
 
 export const dynamic = 'force-dynamic'
+// Transcription + several tool rounds + 503-retry backoff won't fit the
+// platform default (~10s on Vercel) — that cut off as an opaque timeout.
+export const maxDuration = 60
 
 // Max inline audio we accept. Gemini inline requests are limited (~20MB total);
 // keep some headroom for the CRM context and instructions.
@@ -229,7 +232,8 @@ ${context}`
     // and is shared across the whole workspace/API key, so a short burst of
     // concurrent users often clears within a couple of retries.
     const MODEL = 'gemini-2.5-flash'
-    const MAX_ATTEMPTS = 4
+    // 6 attempts ≈ up to ~15s of backoff — real 503 spikes outlive 4/~3.5s.
+    const MAX_ATTEMPTS = 6
     const isOverloaded = (e: unknown) =>
       /503|UNAVAILABLE|overloaded|high demand|429|RESOURCE_EXHAUSTED|rate.?limit/i.test(
         e instanceof Error ? e.message : String(e)
