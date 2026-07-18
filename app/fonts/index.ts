@@ -9,6 +9,11 @@ export const firaGO = localFont({
     { path: './firago/FiraGO-Medium.otf', weight: '500', style: 'normal' },
     { path: './firago/FiraGO-SemiBold.otf', weight: '600', style: 'normal' },
     { path: './firago/FiraGO-Bold.otf', weight: '700', style: 'normal' },
+    // Italic (letter slant) — used by the strategy-board sticky notes.
+    { path: './firago/FiraGO-Italic.otf', weight: '400', style: 'italic' },
+    { path: './firago/FiraGO-MediumItalic.otf', weight: '500', style: 'italic' },
+    { path: './firago/FiraGO-SemiBoldItalic.otf', weight: '600', style: 'italic' },
+    { path: './firago/FiraGO-BoldItalic.otf', weight: '700', style: 'italic' },
   ],
   variable: '--font-firago',
   display: 'swap',

@@ -29,18 +29,49 @@ import {
   type NodeProps,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { ArrowLeft, Plus, Trash2, Check, Loader2 } from 'lucide-react'
+import { ArrowLeft, Plus, Trash2, Check, Loader2, Bold, Italic, Minus } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
-// Sticky-note node: green card, black text, editable in place. Drag the round
-// handles on the sides to draw an arrow to another note; the + button spawns
-// an already-connected child note to the right.
+// Sticky-note node: green card, black text, editable in place, vertically &
+// horizontally centred like Miro. When selected, a floating toolbar lets you
+// bold / italic / resize the text. Drag the round handles on the sides to draw
+// an arrow to another note; the + button spawns a connected child to the right.
+//
+// Georgian text always renders in FiraGO; Latin falls back to the app's Geist
+// (per-glyph fallback: Geist has no Georgian glyphs, so those pick up FiraGO).
 // ---------------------------------------------------------------------------
 
-type StickyData = { text: string; onChange: (id: string, text: string) => void; onSpawn: (id: string) => void }
+const NOTE_FONT = 'var(--font-geist-sans), var(--font-firago), sans-serif'
+const DEFAULT_FONT_SIZE = 14
+const MIN_FONT_SIZE = 10
+const MAX_FONT_SIZE = 48
+
+type Formatting = { bold?: boolean; italic?: boolean; fontSize?: number }
+type StickyData = Formatting & {
+  text: string
+  onChange: (id: string, text: string) => void
+  onSpawn: (id: string) => void
+  onFormat: (id: string, patch: Formatting) => void
+}
 type StickyNode = Node<StickyData, 'sticky'>
 
 function StickyNoteNode({ id, data, selected }: NodeProps<StickyNode>) {
+  const taRef = useRef<HTMLTextAreaElement>(null)
+  const fontSize = data.fontSize ?? DEFAULT_FONT_SIZE
+
+  // Auto-grow the textarea to its content so flex-centring keeps the text in
+  // the middle of the note (a textarea otherwise anchors text to the top).
+  useEffect(() => {
+    const el = taRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [data.text, fontSize, data.bold, data.italic])
+
+  // Keep focus in the textarea when tapping a toolbar button so typing can
+  // continue uninterrupted; nodrag stops the click from dragging the node.
+  const hold = (e: React.MouseEvent) => e.preventDefault()
+
   return (
     <div
       className={`h-full w-full rounded-lg border-2 bg-emerald-200 shadow-md transition-shadow ${
@@ -65,13 +96,77 @@ function StickyNoteNode({ id, data, selected }: NodeProps<StickyNode>) {
         position={Position.Right}
         className="!h-3 !w-3 !border-2 !border-emerald-600 !bg-white"
       />
-      <textarea
-        value={data.text}
-        onChange={(e) => data.onChange(id, e.target.value)}
-        placeholder="ჩაწერე…"
-        // nodrag/nopan: typing & selecting text must not drag the canvas.
-        className="nodrag nopan h-full w-full resize-none bg-transparent p-2.5 text-sm font-medium leading-snug text-slate-900 placeholder-emerald-700/50 focus:outline-none"
-      />
+
+      {/* Floating format toolbar (Miro-style) */}
+      {selected && (
+        <div
+          onMouseDown={hold}
+          className="nodrag nopan absolute -top-2 left-1/2 z-20 flex -translate-x-1/2 -translate-y-full items-center gap-0.5 rounded-lg border border-slate-700 bg-slate-800 px-1 py-1 text-slate-200 shadow-xl"
+        >
+          <button
+            onClick={() => data.onFormat(id, { bold: !data.bold })}
+            title="მუქი"
+            className={`flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-slate-700 ${
+              data.bold ? 'bg-slate-700 text-white' : ''
+            }`}
+          >
+            <Bold size={14} />
+          </button>
+          <button
+            onClick={() => data.onFormat(id, { italic: !data.italic })}
+            title="დახრილი"
+            className={`flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-slate-700 ${
+              data.italic ? 'bg-slate-700 text-white' : ''
+            }`}
+          >
+            <Italic size={14} />
+          </button>
+          <span className="mx-0.5 h-5 w-px bg-slate-600" />
+          <button
+            onClick={() =>
+              data.onFormat(id, { fontSize: Math.max(MIN_FONT_SIZE, fontSize - 2) })
+            }
+            title="შემცირება"
+            className="flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-slate-700"
+          >
+            <Minus size={14} />
+          </button>
+          <span className="w-6 text-center text-xs tabular-nums text-slate-300">
+            {fontSize}
+          </span>
+          <button
+            onClick={() =>
+              data.onFormat(id, { fontSize: Math.min(MAX_FONT_SIZE, fontSize + 2) })
+            }
+            title="გაზრდა"
+            className="flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-slate-700"
+          >
+            <Plus size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* Centred text: flex wrapper vertically & horizontally centres the
+          auto-height textarea, so writing starts from the middle. */}
+      <div className="flex h-full w-full items-center justify-center overflow-hidden p-2.5">
+        <textarea
+          ref={taRef}
+          value={data.text}
+          onChange={(e) => data.onChange(id, e.target.value)}
+          placeholder="ჩაწერე…"
+          rows={1}
+          // nodrag/nopan: typing & selecting text must not drag the canvas.
+          className="nodrag nopan w-full resize-none overflow-hidden bg-transparent text-center leading-snug text-slate-900 placeholder-emerald-700/50 focus:outline-none"
+          style={{
+            fontFamily: NOTE_FONT,
+            fontSize,
+            fontWeight: data.bold ? 700 : 500,
+            fontStyle: data.italic ? 'italic' : 'normal',
+            letterSpacing: 'normal',
+          }}
+        />
+      </div>
+
       {selected && (
         <button
           onClick={() => data.onSpawn(id)}
@@ -95,7 +190,16 @@ const defaultEdgeOptions = {
 
 // Stored board shape (what lands in boards.data as JSONB).
 export type BoardData = {
-  nodes: { id: string; position: { x: number; y: number }; width?: number; height?: number; text: string }[]
+  nodes: {
+    id: string
+    position: { x: number; y: number }
+    width?: number
+    height?: number
+    text: string
+    bold?: boolean
+    italic?: boolean
+    fontSize?: number
+  }[]
   edges: { id: string; source: string; target: string }[]
 }
 
@@ -127,6 +231,13 @@ function BoardCanvas({
     )
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Toggle bold/italic or bump font size on a single note.
+  const onFormat = useCallback((id: string, patch: Formatting) => {
+    setNodes((ns) =>
+      ns.map((n) => (n.id === id ? { ...n, data: { ...n.data, ...patch } } : n))
+    )
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   const onSpawn = useCallback((id: string) => {
     setNodes((ns) => {
       const parent = ns.find((n) => n.id === id)
@@ -141,7 +252,7 @@ function BoardCanvas({
         },
         width: 180,
         height: 100,
-        data: { text: '', onChange: onTextChange, onSpawn },
+        data: { text: '', onChange: onTextChange, onSpawn, onFormat },
       }
       setEdges((es) =>
         addEdge(
@@ -161,7 +272,15 @@ function BoardCanvas({
         position: n.position,
         width: n.width ?? 180,
         height: n.height ?? 100,
-        data: { text: n.text, onChange: onTextChange, onSpawn },
+        data: {
+          text: n.text,
+          bold: n.bold,
+          italic: n.italic,
+          fontSize: n.fontSize,
+          onChange: onTextChange,
+          onSpawn,
+          onFormat,
+        },
       })),
     [] // eslint-disable-line react-hooks/exhaustive-deps
   )
@@ -191,11 +310,11 @@ function BoardCanvas({
         position: { x: pos.x - 90, y: pos.y - 50 },
         width: 180,
         height: 100,
-        data: { text: '', onChange: onTextChange, onSpawn },
+        data: { text: '', onChange: onTextChange, onSpawn, onFormat },
       }
       setNodes((ns) => [...ns, node])
     },
-    [screenToFlowPosition, onTextChange, onSpawn, setNodes]
+    [screenToFlowPosition, onTextChange, onSpawn, onFormat, setNodes]
   )
 
   function addNoteCenter() {
@@ -209,7 +328,7 @@ function BoardCanvas({
       position: { x: pos.x - 90, y: pos.y - 50 },
       width: 180,
       height: 100,
-      data: { text: '', onChange: onTextChange, onSpawn },
+      data: { text: '', onChange: onTextChange, onSpawn, onFormat },
     }
     setNodes((ns) => [...ns, node])
   }
@@ -233,6 +352,9 @@ function BoardCanvas({
         width: n.width,
         height: n.height,
         text: (n.data as StickyData).text,
+        bold: (n.data as StickyData).bold,
+        italic: (n.data as StickyData).italic,
+        fontSize: (n.data as StickyData).fontSize,
       })),
       edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
     }
