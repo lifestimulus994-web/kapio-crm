@@ -481,3 +481,19 @@ create trigger on_auth_user_created
 -- ---------------------------------------------------------------------------
 -- update public.workspaces set status = 'approved' where status = 'pending';
 -- update public.members    set status = 'approved' where status = 'pending';
+
+-- ============================================================================
+-- 10. STRATEGY BOARDS (brain-map canvas) — same as migration-boards.sql
+-- ============================================================================
+
+create table if not exists public.boards (
+  id           uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references public.workspaces(id) on delete cascade,
+  created_by   uuid references public.members(id) on delete set null,
+  name         text not null default 'ახალი დაფა',
+  data         jsonb not null default '{"nodes": [], "edges": []}',
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
+);
+
+create index if not exists idx_boards_workspace on public.boards(workspace_id, updated_at desc);

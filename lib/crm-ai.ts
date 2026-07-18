@@ -1174,6 +1174,59 @@ export const tools: FunctionDeclaration[] = [
     },
   },
   {
+    name: 'list_boards',
+    description:
+      "List this workspace's strategy boards (brain-map canvases in the სტრატეგია section where the team writes sales strategies as connected sticky notes). Returns each board's name, note count, and last-updated date.",
+    parameters: { type: Type.OBJECT, properties: {} },
+  },
+  {
+    name: 'get_board',
+    description:
+      "Read a strategy board's full content by its name: every sticky note's text plus the arrow connections between them (as 'from → to' pairs). Use when asked to explain, summarize, or answer questions about a strategy/board.",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        name: {
+          type: Type.STRING,
+          description: 'Board name (partial match is fine).',
+        },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'create_board',
+    description:
+      'Create a new strategy board (brain-map) from a plan: pass a name and the notes as a tree — each note has an id, its text, and optionally the parent note id it should be connected to with an arrow. Layout is automatic (left → right by depth). Use when asked to turn a plan/strategy into a board, e.g. "ააგე დაფა ამ გეგმიდან". Keep each note SHORT (one step/thought, a few words), like real sticky notes — details stay in the conversation.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        name: { type: Type.STRING, description: 'Board name (required).' },
+        notes: {
+          type: Type.ARRAY,
+          description: 'The sticky notes, as a tree.',
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              id: {
+                type: Type.STRING,
+                description: 'Short unique id for this note, e.g. "1", "2a".',
+              },
+              text: { type: Type.STRING, description: 'The note text (short).' },
+              parent: {
+                type: Type.STRING,
+                description:
+                  'Id of the note this one follows from (an arrow parent → this). Omit for a root/starting note.',
+              },
+            },
+            required: ['id', 'text'],
+          },
+        },
+      },
+      required: ['name', 'notes'],
+    },
+  },
+  {
     name: 'invite_member',
     description:
       "Invite a new teammate to this workspace by creating their login (email + password), as 'manager' or 'member' role. OWNER ONLY. The invited person still needs the Kapio super-admin's manual approval before they can use the CRM — inviting them does not grant access by itself, it only creates the pending account, same as the Team page's own invite form.",
@@ -1418,6 +1471,137 @@ async function runToolInner(
       leads: found.leads,
       sources: found.sources,
       note: `Found ${found.leads.length} companies via Google Search — ALL web-sourced and UNVERIFIED, say so. Present them as a numbered list with the details found (leave out fields that are empty). Then OFFER to save them as leads. If the user asks to save (now or upfront in the original request), call create_lead once per company: full_name = company name, company = company name, source = "AI ლიდგენერაცია", phone/email from the results, notes = note + address + "⚠️ ვებ-ძიებით ნაპოვნია — გადაამოწმე". Skip any company already present in the CRM snapshot.`,
+    }
+  }
+
+  if (name === 'list_boards') {
+    const { data, error } = await supabase
+      .from('boards')
+      .select('id, name, data, updated_at')
+      .eq('workspace_id', workspaceId)
+      .order('updated_at', { ascending: false })
+    if (error) return { success: false, error: error.message }
+    return {
+      success: true,
+      boards: (data ?? []).map((b) => ({
+        name: b.name,
+        notes: Array.isArray(b.data?.nodes) ? b.data.nodes.length : 0,
+        updated_at: b.updated_at,
+      })),
+      note: 'Strategy boards live in the სტრატეგია section (/boards).',
+    }
+  }
+
+  if (name === 'get_board') {
+    const q = str(args.name)
+    if (!q) return { success: false, error: 'Board name is required.' }
+    const { data, error } = await supabase
+      .from('boards')
+      .select('id, name, data')
+      .eq('workspace_id', workspaceId)
+      .ilike('name', `%${q}%`)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (error) return { success: false, error: error.message }
+    if (!data) return { success: false, error: `Board "${q}" not found.` }
+    type BNode = { id?: string; text?: string }
+    type BEdge = { source?: string; target?: string }
+    const nodes: BNode[] = Array.isArray(data.data?.nodes) ? data.data.nodes : []
+    const edges: BEdge[] = Array.isArray(data.data?.edges) ? data.data.edges : []
+    const textOf = new Map(nodes.map((n) => [n.id, (n.text ?? '').trim() || '(ცარიელი)']))
+    return {
+      success: true,
+      board: data.name,
+      notes: nodes.map((n) => textOf.get(n.id)),
+      connections: edges
+        .filter((e) => textOf.has(e.source) && textOf.has(e.target))
+        .map((e) => `${textOf.get(e.source)} → ${textOf.get(e.target)}`),
+    }
+  }
+
+  if (name === 'create_board') {
+    const boardName = str(args.name) ?? 'ახალი დაფა'
+    type NoteIn = { id: string; text: string; parent: string | null }
+    const notes: NoteIn[] = (Array.isArray(args.notes) ? args.notes : [])
+      .map((raw, i) => {
+        const n = (raw ?? {}) as Record<string, unknown>
+        return {
+          id: String(n.id ?? i + 1),
+          text: typeof n.text === 'string' ? n.text.trim() : '',
+          parent:
+            n.parent != null && String(n.parent).trim()
+              ? String(n.parent).trim()
+              : null,
+        }
+      })
+      .filter((n) => n.text)
+    if (notes.length === 0)
+      return { success: false, error: 'At least one note with text is required.' }
+
+    // Tree layout, left → right: x by depth, y packed by leaf order so
+    // branches don't overlap; a parent centers on its children.
+    const byId = new Map(notes.map((n) => [n.id, n]))
+    const children = new Map<string, NoteIn[]>()
+    const roots: NoteIn[] = []
+    for (const n of notes) {
+      if (n.parent && byId.has(n.parent) && n.parent !== n.id) {
+        const arr = children.get(n.parent) ?? []
+        arr.push(n)
+        children.set(n.parent, arr)
+      } else {
+        roots.push(n)
+      }
+    }
+    let leaf = 0
+    const pos = new Map<string, { x: number; y: number }>()
+    const visited = new Set<string>()
+    const visit = (n: NoteIn, depth: number): number => {
+      if (visited.has(n.id)) return pos.get(n.id)?.y ?? 0 // cycle guard
+      visited.add(n.id)
+      const kids = children.get(n.id) ?? []
+      let y: number
+      if (kids.length === 0) {
+        y = leaf * 150
+        leaf++
+      } else {
+        const ys = kids.map((k) => visit(k, depth + 1))
+        y = (Math.min(...ys) + Math.max(...ys)) / 2
+      }
+      pos.set(n.id, { x: depth * 320, y })
+      return y
+    }
+    roots.forEach((r) => visit(r, 0))
+
+    const boardData = {
+      nodes: notes.map((n) => ({
+        id: n.id,
+        position: pos.get(n.id) ?? { x: 0, y: 0 },
+        width: 220,
+        height: 110,
+        text: n.text,
+      })),
+      edges: notes
+        .filter((n) => n.parent && byId.has(n.parent) && n.parent !== n.id)
+        .map((n) => ({ id: `e${n.parent}-${n.id}`, source: n.parent!, target: n.id })),
+    }
+
+    const { data, error } = await supabase
+      .from('boards')
+      .insert({
+        workspace_id: workspaceId,
+        created_by: scope.memberId,
+        name: boardName,
+        data: boardData,
+      })
+      .select('id, name')
+      .single()
+    if (error) return { success: false, error: error.message }
+    revalidatePath('/boards')
+    return {
+      success: true,
+      created: data,
+      note: `Board created with ${notes.length} notes. Tell the user to open it in the სტრატეგია section.`,
     }
   }
 
