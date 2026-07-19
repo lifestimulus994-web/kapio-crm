@@ -8,15 +8,36 @@ import { KanbanSquare, Building2, Users, ListTodo, UserCog, Target, Sparkles, Wo
 import VoiceImport from '@/components/VoiceImport'
 import LogoutButton from '@/components/LogoutButton'
 
-const nav = [
-  { href: '/ai', label: 'AI ასისტენტი', Icon: Sparkles },
-  { href: '/dashboard', label: 'Pipeline', Icon: KanbanSquare },
-  { href: '/organizations', label: 'Organizations', Icon: Building2 },
-  { href: '/contacts', label: 'Contacts', Icon: Users },
-  { href: '/tasks', label: 'Tasks', Icon: ListTodo },
-  { href: '/leads', label: 'Leads', Icon: Target },
-  { href: '/inbox', label: 'შემოსული', Icon: MessageSquare },
-  { href: '/boards', label: 'სტრატეგია', Icon: Workflow },
+type NavItem = { href: string; label: string; Icon: typeof Sparkles }
+type NavGroup = { title?: string; items: NavItem[] }
+
+// Grouped by workflow, all Georgian: a lead comes IN (გაყიდვები), becomes a
+// record (ბაზა), then work happens around it (სამუშაო). AI sits on top as the
+// primary entry point; owner-only management lives at the bottom.
+const groups: NavGroup[] = [
+  { items: [{ href: '/ai', label: 'AI ასისტენტი', Icon: Sparkles }] },
+  {
+    title: 'გაყიდვები',
+    items: [
+      { href: '/inbox', label: 'შემოსული', Icon: MessageSquare },
+      { href: '/leads', label: 'ლიდები', Icon: Target },
+      { href: '/dashboard', label: 'შესაძლებლობები', Icon: KanbanSquare },
+    ],
+  },
+  {
+    title: 'ბაზა',
+    items: [
+      { href: '/organizations', label: 'ორგანიზაციები', Icon: Building2 },
+      { href: '/contacts', label: 'კონტაქტები', Icon: Users },
+    ],
+  },
+  {
+    title: 'სამუშაო',
+    items: [
+      { href: '/tasks', label: 'დავალებები', Icon: ListTodo },
+      { href: '/boards', label: 'სტრატეგია', Icon: Workflow },
+    ],
+  },
 ]
 
 export default function Sidebar({
@@ -28,7 +49,9 @@ export default function Sidebar({
 }) {
   const pathname = usePathname()
   const [open, setOpen] = useState(false)
-  const items = isOwner ? [...nav, { href: '/team', label: 'გუნდი', Icon: UserCog }] : nav
+  const renderGroups: NavGroup[] = isOwner
+    ? [...groups, { title: 'მართვა', items: [{ href: '/team', label: 'გუნდი', Icon: UserCog }] }]
+    : groups
 
   return (
     <>
@@ -84,26 +107,40 @@ export default function Sidebar({
         {/* Voice note → CRM */}
         <VoiceImport />
 
-        {/* Nav */}
-        <nav className="flex-1 space-y-1 px-3 py-2">
-          {items.map(({ href, label, Icon }) => {
-            const active = pathname.startsWith(href)
-            return (
-              <Link
-                key={href}
-                href={href}
-                onClick={() => setOpen(false)}
-                className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                  active
-                    ? 'bg-emerald-900/40 text-emerald-400'
-                    : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
-                }`}
-              >
-                <Icon size={18} />
-                {label}
-              </Link>
-            )
-          })}
+        {/* Nav — grouped by workflow */}
+        <nav className="flex-1 overflow-y-auto px-3 py-2">
+          {renderGroups.map((group, gi) => (
+            <div key={group.title ?? `g${gi}`} className={gi === 0 ? '' : 'mt-4'}>
+              {group.title && (
+                <div
+                  className="px-3 pb-1 text-[10px] font-semibold uppercase text-slate-600"
+                  style={{ letterSpacing: 'normal' }}
+                >
+                  {group.title}
+                </div>
+              )}
+              <div className="space-y-1">
+                {group.items.map(({ href, label, Icon }) => {
+                  const active = pathname.startsWith(href)
+                  return (
+                    <Link
+                      key={href}
+                      href={href}
+                      onClick={() => setOpen(false)}
+                      className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                        active
+                          ? 'bg-emerald-900/40 text-emerald-400'
+                          : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                      }`}
+                    >
+                      <Icon size={18} />
+                      {label}
+                    </Link>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
         </nav>
 
         <div className="space-y-2 border-t border-slate-800 px-3 py-3">
