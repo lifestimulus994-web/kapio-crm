@@ -9,13 +9,14 @@ import {
   MessageSquare,
   Megaphone,
   Check,
+  Camera,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
-// Omnichannel inbox: conversation list (left) + thread (right). Inbound
-// messages arrive via the Meta webhook and land in the DB; this UI polls for
-// them every few seconds (no realtime socket yet). Replies go back out
-// through the Page. AI drafts a suggested reply the human edits/sends.
+// Omnichannel inbox — three panes: conversation list | thread (centered,
+// capped width) | contact/context panel. Inbound messages arrive via the Meta
+// webhook and are polled here every few seconds. Replies go back through the
+// Page; AI drafts a suggested reply the human edits before sending.
 // ---------------------------------------------------------------------------
 
 type Conversation = {
@@ -34,15 +35,41 @@ type Message = { id: string; direction: 'in' | 'out'; body: string | null; creat
 const POLL_MS = 5000
 
 function sourceBadge(source: string | null) {
-  if (source === 'fb_ad') return { label: 'რეკლამა', Icon: Megaphone, cls: 'text-amber-400' }
-  if (source === 'ig') return { label: 'Instagram', Icon: MessageSquare, cls: 'text-pink-400' }
+  if (source === 'fb_ad') return { label: 'რეკლამიდან', Icon: Megaphone, cls: 'text-amber-400' }
+  if (source === 'ig') return { label: 'Instagram', Icon: Camera, cls: 'text-pink-400' }
   return { label: 'Messenger', Icon: MessageSquare, cls: 'text-sky-400' }
+}
+
+function initials(name: string | null) {
+  if (!name) return '?'
+  const p = name.trim().split(/\s+/)
+  return ((p[0]?.[0] ?? '') + (p[1]?.[0] ?? '')).toUpperCase() || '?'
 }
 
 function timeLabel(iso: string | null) {
   if (!iso) return ''
-  const d = new Date(iso)
-  return d.toLocaleString('ka-GE', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })
+  return new Date(iso).toLocaleString('ka-GE', { hour: '2-digit', minute: '2-digit' })
+}
+function dateTimeLabel(iso: string | null) {
+  if (!iso) return ''
+  return new Date(iso).toLocaleString('ka-GE', {
+    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+  })
+}
+
+// A round initials avatar with a colour derived from the name (stable per person).
+function Avatar({ name, size = 36 }: { name: string | null; size?: number }) {
+  const hues = ['bg-emerald-600', 'bg-sky-600', 'bg-violet-600', 'bg-amber-600', 'bg-rose-600', 'bg-teal-600']
+  let h = 0
+  for (const c of name ?? '?') h = (h + c.charCodeAt(0)) % hues.length
+  return (
+    <span
+      className={`flex flex-none items-center justify-center rounded-full font-semibold text-white ${hues[h]}`}
+      style={{ width: size, height: size, fontSize: size * 0.4 }}
+    >
+      {initials(name)}
+    </span>
+  )
 }
 
 export default function Inbox() {
@@ -58,7 +85,6 @@ export default function Inbox() {
 
   const activeConvo = convos.find((c) => c.id === activeId) ?? null
 
-  // --- polling: conversation list -----------------------------------------
   const loadConvos = useCallback(async () => {
     try {
       const res = await fetch('/api/inbox', { cache: 'no-store' })
@@ -76,7 +102,6 @@ export default function Inbox() {
     return () => clearInterval(t)
   }, [loadConvos])
 
-  // --- polling: active thread ---------------------------------------------
   const loadThread = useCallback(async (id: string) => {
     try {
       const res = await fetch(`/api/inbox/${id}`, { cache: 'no-store' })
@@ -96,7 +121,6 @@ export default function Inbox() {
     return () => clearInterval(t)
   }, [activeId, loadThread])
 
-  // Keep the thread scrolled to the newest message.
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight })
   }, [messages])
@@ -105,7 +129,6 @@ export default function Inbox() {
     setActiveId(id)
     setInput('')
     setMessages([])
-    // Optimistically clear the unread dot in the list.
     setConvos((cs) => cs.map((c) => (c.id === id ? { ...c, unread: false } : c)))
   }
 
@@ -166,9 +189,11 @@ export default function Inbox() {
     }
   }
 
+  const badge = activeConvo ? sourceBadge(activeConvo.source) : null
+
   return (
     <div className="flex h-full min-h-0">
-      {/* Conversation list */}
+      {/* ---- Pane 1: conversation list ---- */}
       <div className="flex w-72 flex-none flex-col border-r border-slate-800">
         <div className="border-b border-slate-800 px-4 py-3 text-sm font-semibold text-slate-100">
           შემოსული
@@ -186,22 +211,25 @@ export default function Inbox() {
               <button
                 key={c.id}
                 onClick={() => openConvo(c.id)}
-                className={`flex w-full flex-col gap-0.5 border-b border-slate-800/60 px-4 py-3 text-left transition-colors ${
+                className={`flex w-full items-center gap-3 border-b border-slate-800/60 px-3 py-3 text-left transition-colors ${
                   active ? 'bg-slate-800' : 'hover:bg-slate-800/50'
                 }`}
               >
-                <div className="flex items-center gap-2">
-                  {c.unread && <span className="h-2 w-2 flex-none rounded-full bg-emerald-500" />}
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-100">
-                    {c.name || 'უცნობი'}
-                  </span>
-                  <span className="flex-none text-[10px] text-slate-500">{timeLabel(c.last_message_at)}</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <b.Icon size={12} className={b.cls} />
-                  <span className="min-w-0 flex-1 truncate text-xs text-slate-400">
-                    {c.last_message_preview || '—'}
-                  </span>
+                <Avatar name={c.name} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-100">
+                      {c.name || 'უცნობი'}
+                    </span>
+                    <span className="flex-none text-[10px] text-slate-500">{timeLabel(c.last_message_at)}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <b.Icon size={11} className={b.cls} />
+                    <span className="min-w-0 flex-1 truncate text-xs text-slate-400">
+                      {c.last_message_preview || '—'}
+                    </span>
+                    {c.unread && <span className="h-2 w-2 flex-none rounded-full bg-emerald-500" />}
+                  </div>
                 </div>
               </button>
             )
@@ -209,75 +237,42 @@ export default function Inbox() {
         </div>
       </div>
 
-      {/* Thread */}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      {/* ---- Pane 2: thread ---- */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-slate-950/40">
         {!activeConvo ? (
           <div className="flex flex-1 items-center justify-center text-sm text-slate-500">
             აირჩიე საუბარი მარცხნიდან
           </div>
         ) : (
           <>
-            {/* Header */}
-            <div className="flex flex-none items-center justify-between border-b border-slate-800 px-4 py-3">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold text-slate-100">
-                  {activeConvo.name || 'უცნობი'}
-                </span>
-                {(() => {
-                  const b = sourceBadge(activeConvo.source)
-                  return (
-                    <span className={`flex items-center gap-1 text-[11px] ${b.cls}`}>
-                      <b.Icon size={12} /> {b.label}
-                    </span>
-                  )
-                })()}
-              </div>
-              {leadId ? (
-                <span className="flex items-center gap-1 text-[11px] text-emerald-400">
-                  <Check size={13} /> ლიდად დამატებულია
-                </span>
-              ) : (
-                <button
-                  onClick={convertToLead}
-                  disabled={converting}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-200 transition-colors hover:bg-slate-700 disabled:opacity-50"
-                >
-                  {converting ? <Loader2 size={13} className="animate-spin" /> : <UserPlus size={13} />}
-                  ლიდად გადაქცევა
-                </button>
-              )}
-            </div>
-
-            {/* Messages */}
-            <div ref={threadRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-4">
-              {messages.map((m) => (
-                <div
-                  key={m.id}
-                  className={`flex ${m.direction === 'out' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div
-                    className={`max-w-[75%] rounded-2xl px-3.5 py-2 text-sm ${
-                      m.direction === 'out'
-                        ? 'bg-emerald-600 text-white'
-                        : 'bg-slate-800 text-slate-100'
-                    }`}
-                  >
-                    {m.body}
-                    <div
-                      className={`mt-0.5 text-[10px] ${
-                        m.direction === 'out' ? 'text-emerald-100/70' : 'text-slate-500'
-                      }`}
-                    >
-                      {timeLabel(m.created_at)}
+            <div ref={threadRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-6">
+              <div className="mx-auto flex max-w-2xl flex-col gap-3">
+                {messages.map((m) =>
+                  m.direction === 'in' ? (
+                    <div key={m.id} className="flex items-end gap-2">
+                      <Avatar name={activeConvo.name} size={28} />
+                      <div className="max-w-[80%]">
+                        <div className="rounded-2xl rounded-bl-sm bg-slate-800 px-4 py-2.5 text-sm text-slate-100">
+                          {m.body}
+                        </div>
+                        <div className="mt-1 pl-1 text-[10px] text-slate-500">{timeLabel(m.created_at)}</div>
+                      </div>
                     </div>
-                  </div>
-                </div>
-              ))}
+                  ) : (
+                    <div key={m.id} className="flex flex-col items-end">
+                      <div className="max-w-[80%] rounded-2xl rounded-br-sm bg-emerald-600 px-4 py-2.5 text-sm text-white">
+                        {m.body}
+                      </div>
+                      <div className="mt-1 pr-1 text-[10px] text-slate-500">{timeLabel(m.created_at)}</div>
+                    </div>
+                  )
+                )}
+              </div>
             </div>
 
             {/* Composer */}
-            <div className="flex-none border-t border-slate-800 p-3">
-              <div className="flex items-end gap-2">
+            <div className="flex-none border-t border-slate-800 px-4 py-3">
+              <div className="mx-auto flex max-w-2xl items-end gap-2">
                 <button
                   onClick={aiDraft}
                   disabled={drafting}
@@ -312,6 +307,62 @@ export default function Inbox() {
           </>
         )}
       </div>
+
+      {/* ---- Pane 3: contact / context ---- */}
+      {activeConvo && badge && (
+        <div className="hidden w-72 flex-none flex-col border-l border-slate-800 lg:flex">
+          <div className="flex flex-col items-center gap-3 border-b border-slate-800 px-5 py-6 text-center">
+            <Avatar name={activeConvo.name} size={64} />
+            <div>
+              <div className="text-base font-semibold text-slate-100">{activeConvo.name || 'უცნობი'}</div>
+              <div className={`mt-1 flex items-center justify-center gap-1.5 text-xs ${badge.cls}`}>
+                <badge.Icon size={13} /> {badge.label}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex-1 space-y-4 overflow-y-auto p-5">
+            {/* Lead status / action */}
+            <div>
+              <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                ლიდი
+              </div>
+              {leadId ? (
+                <div className="flex items-center gap-1.5 rounded-lg border border-emerald-800 bg-emerald-900/30 px-3 py-2 text-xs text-emerald-400">
+                  <Check size={14} /> ლიდად დამატებულია
+                </div>
+              ) : (
+                <button
+                  onClick={convertToLead}
+                  disabled={converting}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
+                >
+                  {converting ? <Loader2 size={14} className="animate-spin" /> : <UserPlus size={14} />}
+                  ლიდად გადაქცევა
+                </button>
+              )}
+            </div>
+
+            {/* Facts */}
+            <div className="space-y-2 text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-500">არხი</span>
+                <span className="text-slate-300">{badge.label}</span>
+              </div>
+              {activeConvo.ad_id && (
+                <div className="flex justify-between gap-2">
+                  <span className="text-slate-500">რეკლამა</span>
+                  <span className="truncate text-slate-300">{activeConvo.ad_id}</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-slate-500">ბოლო შეტყობინება</span>
+                <span className="text-slate-300">{dateTimeLabel(activeConvo.last_message_at)}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
