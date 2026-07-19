@@ -3,13 +3,19 @@
 @theme inline {
   --color-background: #0f172a;
   --color-foreground: #f1f5f9;
-  --font-sans: var(--font-geist-sans);
+  /* Georgian text renders in FiraGO across the whole CRM: Latin uses Geist,
+     and since Geist has no Georgian glyphs the browser falls through to
+     FiraGO per-glyph. Applies everywhere `font-sans` / the default font is
+     inherited. */
+  --font-sans: var(--font-geist-sans), var(--font-firago), sans-serif;
   --font-mono: var(--font-geist-mono);
 }
 
 body {
   background: #0f172a;
   color: #f1f5f9;
+  font-family: var(--font-sans);
+  letter-spacing: normal;
 }
 
 * {
