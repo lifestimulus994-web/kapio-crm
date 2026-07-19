@@ -28,15 +28,18 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser()
 
   // '/' is the public marketing page; /login and /signup are public auth
-  // forms. Everything else requires a session — EXCEPT /api/cron/*, which
-  // Vercel's scheduler calls with no browser session at all (it authorizes
-  // itself via a CRON_SECRET Bearer token checked inside the route handler,
-  // not a cookie); without this exemption every cron request gets redirected
-  // to /login before the route ever runs.
+  // forms. Everything else requires a session — EXCEPT /api/cron/* and
+  // /api/webhooks/*, which external services (Vercel's scheduler, Meta's
+  // webhook delivery) call with no browser session at all. They authorize
+  // themselves inside the route handler instead (cron: CRON_SECRET Bearer;
+  // Meta webhook: X-Hub-Signature-256 + a verify token). Without this
+  // exemption every such request gets redirected to /login — a 307 that Meta
+  // reads as "callback URL couldn't be validated".
   const publicPaths = new Set(['/', '/login', '/signup'])
   const isPublicPath =
     publicPaths.has(request.nextUrl.pathname) ||
-    request.nextUrl.pathname.startsWith('/api/cron/')
+    request.nextUrl.pathname.startsWith('/api/cron/') ||
+    request.nextUrl.pathname.startsWith('/api/webhooks/')
   const isAuthPage =
     request.nextUrl.pathname === '/login' || request.nextUrl.pathname === '/signup'
 
