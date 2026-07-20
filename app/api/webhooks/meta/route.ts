@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
-import { verifySignature, fetchLeadFields, fetchUserName } from '@/lib/meta'
+import { verifySignature, fetchLeadFields, fetchUserName, sendMessage } from '@/lib/meta'
+import { generateReply } from '@/lib/inbox-ai'
 
 export const dynamic = 'force-dynamic'
 // Meta expects a fast 200; heavy work (Graph fetches) is kept minimal. A tenant
@@ -124,6 +125,70 @@ async function handleMessaging(conn: Connection, ev: MessagingEvent) {
       external_id: mid,
     })
   }
+
+  // Auto-reply (if the workspace enabled it and this thread isn't paused).
+  if (text) await maybeAutoReply(conn, convo.id, psid)
+}
+
+// --- AI auto-reply ---------------------------------------------------------
+// Answers an inbound message on the business's behalf when enabled. Sends only
+// if the AI is confident from the workspace knowledge; otherwise flags the
+// thread for a human instead of guessing.
+async function maybeAutoReply(conn: Connection, convoId: string, psid: string) {
+  const { data: settings } = await supabase
+    .from('inbox_settings')
+    .select('ai_enabled, knowledge')
+    .eq('workspace_id', conn.workspace_id)
+    .maybeSingle()
+  if (!settings?.ai_enabled) return
+
+  const { data: convo } = await supabase
+    .from('conversations')
+    .select('ai_enabled')
+    .eq('id', convoId)
+    .maybeSingle()
+  if (!convo?.ai_enabled) return // a human has taken this thread over
+
+  const { data: msgs } = await supabase
+    .from('messages')
+    .select('direction, body')
+    .eq('conversation_id', convoId)
+    .order('created_at', { ascending: true })
+    .limit(20)
+  const transcript = (msgs ?? [])
+    .filter((m) => m.body)
+    .map((m) => `${m.direction === 'in' ? 'Customer' : 'Us'}: ${m.body}`)
+    .join('\n')
+
+  const { handoff, text } = await generateReply(settings.knowledge, transcript)
+
+  if (handoff || !text) {
+    // AI couldn't answer — leave it for a human, don't guess.
+    await supabase.from('conversations').update({ needs_human: true, unread: true }).eq('id', convoId)
+    return
+  }
+
+  try {
+    await sendMessage(psid, text, conn.access_token)
+  } catch (e) {
+    console.error('[auto-reply] send failed', e)
+    await supabase.from('conversations').update({ needs_human: true, unread: true }).eq('id', convoId)
+    return
+  }
+  await supabase.from('messages').insert({
+    conversation_id: convoId,
+    workspace_id: conn.workspace_id,
+    direction: 'out',
+    body: text,
+  })
+  await supabase
+    .from('conversations')
+    .update({
+      last_message_at: new Date().toISOString(),
+      last_message_preview: text.slice(0, 200),
+      unread: false,
+    })
+    .eq('id', convoId)
 }
 
 // --- Lead Ads --------------------------------------------------------------

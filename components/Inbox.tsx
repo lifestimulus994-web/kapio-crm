@@ -12,6 +12,9 @@ import {
   Camera,
   Plus,
   Link2,
+  Bot,
+  BotOff,
+  AlertCircle,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -31,6 +34,8 @@ type Conversation = {
   last_message_preview: string | null
   unread: boolean
   lead_id: string | null
+  needs_human: boolean
+  ai_enabled: boolean
 }
 type Message = { id: string; direction: 'in' | 'out'; body: string | null; created_at: string }
 type Channel = { id: string; platform: string; page_name: string | null }
@@ -84,8 +89,18 @@ export default function Inbox() {
   const [drafting, setDrafting] = useState(false)
   const [converting, setConverting] = useState(false)
   const [leadId, setLeadId] = useState<string | null>(null)
+  const [convoAi, setConvoAi] = useState<{ ai_enabled: boolean; needs_human: boolean }>({
+    ai_enabled: true,
+    needs_human: false,
+  })
   const [channels, setChannels] = useState<Channel[]>([])
   const [showConnect, setShowConnect] = useState(false)
+  // Workspace AI auto-reply settings.
+  const [showAi, setShowAi] = useState(false)
+  const [aiEnabled, setAiEnabled] = useState(false)
+  const [knowledge, setKnowledge] = useState('')
+  const [savingAi, setSavingAi] = useState(false)
+  const [savedAi, setSavedAi] = useState(false)
   const threadRef = useRef<HTMLDivElement>(null)
 
   const activeConvo = convos.find((c) => c.id === activeId) ?? null
@@ -122,6 +137,56 @@ export default function Inbox() {
     loadChannels()
   }, [loadChannels])
 
+  const loadAiSettings = useCallback(async () => {
+    try {
+      const res = await fetch('/api/inbox/settings', { cache: 'no-store' })
+      if (!res.ok) return
+      const d = await res.json()
+      setAiEnabled(!!d.ai_enabled)
+      setKnowledge(d.knowledge ?? '')
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  useEffect(() => {
+    loadAiSettings()
+  }, [loadAiSettings])
+
+  async function saveAiSettings() {
+    setSavingAi(true)
+    setSavedAi(false)
+    try {
+      const res = await fetch('/api/inbox/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ai_enabled: aiEnabled, knowledge }),
+      })
+      if (res.ok) {
+        setSavedAi(true)
+        setTimeout(() => setSavedAi(false), 2500)
+      } else {
+        alert('ვერ შeინახა.')
+      }
+    } finally {
+      setSavingAi(false)
+    }
+  }
+
+  async function toggleConvoAi(enabled: boolean) {
+    if (!activeId) return
+    setConvoAi((s) => ({ ...s, ai_enabled: enabled, needs_human: enabled ? false : s.needs_human }))
+    try {
+      await fetch(`/api/inbox/${activeId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'toggle_ai', enabled }),
+      })
+    } catch {
+      /* optimistic; next poll reconciles */
+    }
+  }
+
   // Show the result of an OAuth connect round-trip (?connect=ok|error|…).
   const [connectMsg, setConnectMsg] = useState<{ ok: boolean; text: string } | null>(null)
   useEffect(() => {
@@ -148,6 +213,10 @@ export default function Inbox() {
       const data = await res.json()
       setMessages(data.messages ?? [])
       setLeadId(data.conversation?.lead_id ?? null)
+      setConvoAi({
+        ai_enabled: data.conversation?.ai_enabled ?? true,
+        needs_human: data.conversation?.needs_human ?? false,
+      })
     } catch {
       /* ignore */
     }
@@ -246,14 +315,65 @@ export default function Inbox() {
         <div className="relative border-b border-slate-800 px-4 py-3">
           <div className="flex items-center justify-between">
             <span className="text-sm font-semibold text-slate-100">შემოსული</span>
-            <button
-              onClick={() => setShowConnect((s) => !s)}
-              className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800 px-2 py-1 text-[11px] font-medium text-slate-200 transition-colors hover:bg-slate-700"
-            >
-              <Link2 size={12} />
-              {channels.length > 0 ? `${channels.length} არხი` : 'დაკავშირება'}
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => { setShowAi((s) => !s); setShowConnect(false) }}
+                className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium transition-colors ${
+                  aiEnabled
+                    ? 'border-emerald-700 bg-emerald-900/40 text-emerald-400'
+                    : 'border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700'
+                }`}
+              >
+                {aiEnabled ? <Bot size={12} /> : <BotOff size={12} />}
+                ავტო-პასუხი
+              </button>
+              <button
+                onClick={() => { setShowConnect((s) => !s); setShowAi(false) }}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800 px-2 py-1 text-[11px] font-medium text-slate-200 transition-colors hover:bg-slate-700"
+              >
+                <Link2 size={12} />
+                {channels.length > 0 ? `${channels.length} არხი` : 'დაკავშირება'}
+              </button>
+            </div>
           </div>
+
+          {/* AI auto-reply settings popover */}
+          {showAi && (
+            <div className="absolute right-4 top-full z-30 mt-1 w-80 rounded-lg border border-slate-700 bg-slate-800 p-3 shadow-xl">
+              <label className="mb-3 flex cursor-pointer items-center justify-between">
+                <span className="text-xs font-semibold text-slate-200">ავტომატური პასუხი</span>
+                <button
+                  onClick={() => setAiEnabled((v) => !v)}
+                  className={`relative h-5 w-9 rounded-full transition-colors ${aiEnabled ? 'bg-emerald-600' : 'bg-slate-600'}`}
+                >
+                  <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${aiEnabled ? 'left-[18px]' : 'left-0.5'}`} />
+                </button>
+              </label>
+              <div className="mb-1 text-[11px] text-slate-400">
+                კომპანიის ინფორმაცია (AI აქედან პასუხობს):
+              </div>
+              <textarea
+                value={knowledge}
+                onChange={(e) => setKnowledge(e.target.value)}
+                rows={7}
+                placeholder="მაგ: სამუშაო საათები, ფასები, მისამართი, სერვისები, ხშირი კითხვები…"
+                className="w-full resize-none rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:border-emerald-600 focus:outline-none"
+                style={{ fontFamily: 'var(--font-geist-sans), var(--font-firago), sans-serif', letterSpacing: 'normal' }}
+              />
+              <div className="mt-2 flex items-center justify-between">
+                <span className="text-[10px] text-slate-500">
+                  {savedAi ? 'შენახულია ✅' : 'AI პასუხობს კლიენტის ენით; ვერ იცის → ადამიანს გადასცემს.'}
+                </span>
+                <button
+                  onClick={saveAiSettings}
+                  disabled={savingAi}
+                  className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
+                >
+                  {savingAi ? '...' : 'შენახვა'}
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Connect popover */}
           {showConnect && (
@@ -317,6 +437,7 @@ export default function Inbox() {
                     <span className="min-w-0 flex-1 truncate text-xs text-slate-400">
                       {c.last_message_preview || '—'}
                     </span>
+                    {c.needs_human && <AlertCircle size={13} className="flex-none text-amber-400" />}
                     {c.unread && <span className="h-2 w-2 flex-none rounded-full bg-emerald-500" />}
                   </div>
                 </div>
@@ -411,6 +532,37 @@ export default function Inbox() {
           </div>
 
           <div className="flex-1 space-y-4 overflow-y-auto p-5">
+            {/* Needs-human alert */}
+            {convoAi.needs_human && (
+              <div className="flex items-start gap-2 rounded-lg border border-amber-800 bg-amber-900/20 px-3 py-2 text-[11px] text-amber-300">
+                <AlertCircle size={14} className="mt-0.5 flex-none" />
+                AI ვერ უპასუხა — საჭიროა შენი პასუხი.
+              </div>
+            )}
+
+            {/* Per-conversation auto-reply */}
+            <div>
+              <div className="mb-1.5 text-[11px] font-medium uppercase text-slate-500" style={{ letterSpacing: 'normal' }}>
+                ავტო-პასუხი ამ საუბარზე
+              </div>
+              <button
+                onClick={() => toggleConvoAi(!convoAi.ai_enabled)}
+                className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-xs transition-colors ${
+                  convoAi.ai_enabled
+                    ? 'border-emerald-800 bg-emerald-900/30 text-emerald-400'
+                    : 'border-slate-700 bg-slate-800 text-slate-300'
+                }`}
+              >
+                <span className="flex items-center gap-1.5">
+                  {convoAi.ai_enabled ? <Bot size={14} /> : <BotOff size={14} />}
+                  {convoAi.ai_enabled ? 'AI პასუხობს' : 'ხელით ვპასუხობ'}
+                </span>
+                <span className={`relative h-4 w-8 rounded-full ${convoAi.ai_enabled ? 'bg-emerald-600' : 'bg-slate-600'}`}>
+                  <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all ${convoAi.ai_enabled ? 'left-[18px]' : 'left-0.5'}`} />
+                </span>
+              </button>
+            </div>
+
             {/* Lead status / action */}
             <div>
               <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-500">

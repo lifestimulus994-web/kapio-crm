@@ -12,7 +12,7 @@ export async function GET() {
 
   const { data, error } = await supabase
     .from('conversations')
-    .select('id, name, platform, source, ad_id, last_message_at, last_message_preview, unread, lead_id')
+    .select('id, name, platform, source, ad_id, last_message_at, last_message_preview, unread, lead_id, needs_human, ai_enabled')
     .eq('workspace_id', me.workspace_id)
     .order('last_message_at', { ascending: false, nullsFirst: false })
     .limit(200)

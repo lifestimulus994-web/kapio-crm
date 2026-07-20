@@ -18,12 +18,14 @@ type Convo = {
   name: string | null
   source: string | null
   lead_id: string | null
+  ai_enabled: boolean
+  needs_human: boolean
 }
 
 async function loadConvo(id: string, workspaceId: string): Promise<Convo | null> {
   const { data } = await supabase
     .from('conversations')
-    .select('id, workspace_id, connection_id, external_id, name, source, lead_id')
+    .select('id, workspace_id, connection_id, external_id, name, source, lead_id, ai_enabled, needs_human')
     .eq('id', id)
     .eq('workspace_id', workspaceId)
     .maybeSingle()
@@ -62,7 +64,7 @@ export async function POST(
   if (!me) return NextResponse.json({ error: 'შესვლა საჭიროა' }, { status: 401 })
   const { id } = await params
 
-  let body: { action?: string; text?: string }
+  let body: { action?: string; text?: string; enabled?: boolean }
   try {
     body = await req.json()
   } catch {
@@ -79,9 +81,21 @@ export async function POST(
       return draft(convo)
     case 'lead':
       return toLead(convo, me.id)
+    case 'toggle_ai':
+      return toggleAi(convo, body.enabled ?? !convo.ai_enabled)
     default:
       return NextResponse.json({ error: 'უცნობი ქმედება.' }, { status: 400 })
   }
+}
+
+// Turn per-thread auto-reply on/off. Turning it back on also clears the
+// "needs human" flag.
+async function toggleAi(convo: Convo, enabled: boolean) {
+  await supabase
+    .from('conversations')
+    .update({ ai_enabled: enabled, needs_human: enabled ? false : convo.needs_human })
+    .eq('id', convo.id)
+  return NextResponse.json({ ok: true, ai_enabled: enabled })
 }
 
 // --- send a reply back through the Page -----------------------------------
@@ -115,9 +129,17 @@ async function reply(convo: Convo, text: string) {
     direction: 'out',
     body: clean,
   })
+  // A human just replied → pause auto-reply for this thread and clear the
+  // "needs human" flag.
   await supabase
     .from('conversations')
-    .update({ last_message_at: now, last_message_preview: clean.slice(0, 200), unread: false })
+    .update({
+      last_message_at: now,
+      last_message_preview: clean.slice(0, 200),
+      unread: false,
+      ai_enabled: false,
+      needs_human: false,
+    })
     .eq('id', convo.id)
 
   return NextResponse.json({ ok: true })
