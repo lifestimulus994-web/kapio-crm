@@ -15,6 +15,7 @@ import {
   Bot,
   BotOff,
   AlertCircle,
+  X,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -337,40 +338,67 @@ export default function Inbox() {
             </div>
           </div>
 
-          {/* AI auto-reply settings popover */}
+          {/* AI auto-reply settings — centered modal (a popover here would be
+              clipped by the narrow list pane). */}
           {showAi && (
-            <div className="absolute right-4 top-full z-30 mt-1 w-80 rounded-lg border border-slate-700 bg-slate-800 p-3 shadow-xl">
-              <label className="mb-3 flex cursor-pointer items-center justify-between">
-                <span className="text-xs font-semibold text-slate-200">ავტომატური პასუხი</span>
-                <button
-                  onClick={() => setAiEnabled((v) => !v)}
-                  className={`relative h-5 w-9 rounded-full transition-colors ${aiEnabled ? 'bg-emerald-600' : 'bg-slate-600'}`}
-                >
-                  <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${aiEnabled ? 'left-[18px]' : 'left-0.5'}`} />
-                </button>
-              </label>
-              <div className="mb-1 text-[11px] text-slate-400">
-                კომპანიის ინფორმაცია (AI აქედან პასუხობს):
-              </div>
-              <textarea
-                value={knowledge}
-                onChange={(e) => setKnowledge(e.target.value)}
-                rows={7}
-                placeholder="მაგ: სამუშაო საათები, ფასები, მისამართი, სერვისები, ხშირი კითხვები…"
-                className="w-full resize-none rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:border-emerald-600 focus:outline-none"
-                style={{ fontFamily: 'var(--font-geist-sans), var(--font-firago), sans-serif', letterSpacing: 'normal' }}
-              />
-              <div className="mt-2 flex items-center justify-between">
-                <span className="text-[10px] text-slate-500">
-                  {savedAi ? 'შენახულია ✅' : 'AI პასუხობს კლიენტის ენით; ვერ იცის → ადამიანს გადასცემს.'}
-                </span>
-                <button
-                  onClick={saveAiSettings}
-                  disabled={savingAi}
-                  className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
-                >
-                  {savingAi ? '...' : 'შენახვა'}
-                </button>
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+              onClick={() => setShowAi(false)}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="w-full max-w-lg rounded-xl border border-slate-700 bg-slate-800 p-5 shadow-2xl"
+              >
+                <div className="mb-4 flex items-center justify-between">
+                  <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+                    <Bot size={16} className="text-emerald-400" /> ავტომატური პასუხი
+                  </h2>
+                  <button
+                    onClick={() => setShowAi(false)}
+                    className="rounded-lg p-1 text-slate-400 hover:bg-slate-700 hover:text-slate-200"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <label className="mb-4 flex cursor-pointer items-center justify-between rounded-lg border border-slate-700 bg-slate-900 px-3 py-2.5">
+                  <span className="text-sm text-slate-200">AI ავტომატურად პასუხობს</span>
+                  <button
+                    type="button"
+                    onClick={() => setAiEnabled((v) => !v)}
+                    className={`relative h-6 w-11 flex-none rounded-full transition-colors ${aiEnabled ? 'bg-emerald-600' : 'bg-slate-600'}`}
+                  >
+                    <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${aiEnabled ? 'left-[22px]' : 'left-0.5'}`} />
+                  </button>
+                </label>
+
+                <div className="mb-1.5 text-xs font-medium text-slate-300">
+                  კომპანიის ინფორმაცია
+                </div>
+                <p className="mb-2 text-[11px] leading-snug text-slate-500">
+                  AI მხოლოდ ამ ტექსტიდან პასუხობს. ჩაწერე ყველაფერი, რაც კლიენტს შეიძლება ჰკითხოს.
+                </p>
+                <textarea
+                  value={knowledge}
+                  onChange={(e) => setKnowledge(e.target.value)}
+                  rows={10}
+                  placeholder="მაგ:&#10;• სამუშაო საათები: ორშ-შაბ 10:00–20:00&#10;• მისამართი: თბილისი, ...&#10;• სერვისები და ფასები: ...&#10;• ხშირი კითხვები: ..."
+                  className="w-full resize-y rounded-lg border border-slate-700 bg-slate-900 px-3 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:border-emerald-600 focus:outline-none"
+                  style={{ fontFamily: 'var(--font-geist-sans), var(--font-firago), sans-serif', letterSpacing: 'normal' }}
+                />
+
+                <div className="mt-4 flex items-center justify-between">
+                  <span className="text-[11px] text-slate-500">
+                    {savedAi ? 'შენახულია ✅' : 'პასუხობს კლიენტის ენით. ვერ იცის → ადამიანს გადასცემს.'}
+                  </span>
+                  <button
+                    onClick={saveAiSettings}
+                    disabled={savingAi}
+                    className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
+                  >
+                    {savingAi ? '...' : 'შენახვა'}
+                  </button>
+                </div>
               </div>
             </div>
           )}
