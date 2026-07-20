@@ -20,12 +20,15 @@ type Convo = {
   lead_id: string | null
   ai_enabled: boolean
   needs_human: boolean
+  lead_score: number
+  interest_level: string | null
+  intent: string | null
 }
 
 async function loadConvo(id: string, workspaceId: string): Promise<Convo | null> {
   const { data } = await supabase
     .from('conversations')
-    .select('id, workspace_id, connection_id, external_id, name, source, lead_id, ai_enabled, needs_human')
+    .select('id, workspace_id, connection_id, external_id, name, source, lead_id, ai_enabled, needs_human, lead_score, interest_level, intent')
     .eq('id', id)
     .eq('workspace_id', workspaceId)
     .maybeSingle()

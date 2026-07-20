@@ -90,9 +90,16 @@ export default function Inbox() {
   const [drafting, setDrafting] = useState(false)
   const [converting, setConverting] = useState(false)
   const [leadId, setLeadId] = useState<string | null>(null)
-  const [convoAi, setConvoAi] = useState<{ ai_enabled: boolean; needs_human: boolean }>({
+  const [convoAi, setConvoAi] = useState<{
+    ai_enabled: boolean
+    needs_human: boolean
+    lead_score: number
+    interest_level: string | null
+  }>({
     ai_enabled: true,
     needs_human: false,
+    lead_score: 0,
+    interest_level: null,
   })
   const [channels, setChannels] = useState<Channel[]>([])
   const [showConnect, setShowConnect] = useState(false)
@@ -219,6 +226,8 @@ export default function Inbox() {
       setConvoAi({
         ai_enabled: data.conversation?.ai_enabled ?? true,
         needs_human: data.conversation?.needs_human ?? false,
+        lead_score: data.conversation?.lead_score ?? 0,
+        interest_level: data.conversation?.interest_level ?? null,
       })
     } catch {
       /* ignore */
@@ -626,6 +635,34 @@ export default function Inbox() {
                   {converting ? <Loader2 size={14} className="animate-spin" /> : <UserPlus size={14} />}
                   ლიდად გადაქცევა
                 </button>
+              )}
+            </div>
+
+            {/* Lead score */}
+            <div>
+              <div className="mb-1.5 flex items-center justify-between text-[11px] font-medium uppercase text-slate-500" style={{ letterSpacing: 'normal' }}>
+                <span>ინტერესის ქულა</span>
+                <span
+                  className={`text-sm font-bold ${
+                    convoAi.lead_score >= 55
+                      ? 'text-emerald-400'
+                      : convoAi.lead_score >= 30
+                        ? 'text-amber-400'
+                        : 'text-slate-400'
+                  }`}
+                >
+                  {convoAi.lead_score}
+                </span>
+              </div>
+              {convoAi.interest_level && (
+                <div className="text-[11px] text-slate-500">
+                  ინტერესი:{' '}
+                  {convoAi.interest_level === 'high'
+                    ? 'მაღალი 🔥'
+                    : convoAi.interest_level === 'medium'
+                      ? 'საშუალო'
+                      : 'სუსტი'}
+                </div>
               )}
             </div>
 

@@ -1,78 +1,138 @@
 import { GoogleGenAI } from '@google/genai'
+import type { LeadSignals } from '@/lib/lead-score'
 
 // ---------------------------------------------------------------------------
-// Customer-facing auto-reply brain. Answers inbound messages as a warm human
-// rep would — using the business's knowledge for facts and its tone for voice.
-// It engages with greetings and vague/conversational messages instead of
-// bailing; it only hands off when the customer asks for a SPECIFIC fact or
-// commitment that genuinely isn't in the knowledge, and even then it sends a
-// short warm holding message so the customer is never left on silence.
+// Customer-facing auto-reply brain — phase 1: ONE structured call returns both
+// the reply and the sales signals. The reply reads like a warm human rep; the
+// signals feed the deterministic lead score (lib/lead-score). It answers only
+// from the business knowledge, engages with greetings/vague messages, and
+// hands off (with a warm holding line) only for specific unanswerable facts.
 // ---------------------------------------------------------------------------
 
-const HANDOFF = '[[HANDOFF]]'
 const DEFAULT_HOLDING = 'ერთი წუთით — კოლეგა მალე დაგიკავშირდებათ 🙏'
 const DEFAULT_TONE =
-  'თბილი, მეგობრული და თავდაჯერებული. მიმართე თავაზიანად („თქვენ"). ისაუბრე ბუნებრივად, ცოცხლად, როგორც კარგი ადამიანი-კონსულტანტი. ზომიერად გამოიყენე ემოჯი. მოკლედ, მაგრამ გულთბილად.'
+  'თბილი, მეგობრული და თავდაჯერებული. მიმართე თავაზიანად („თქვენ"). ისაუბრე ბუნებრივად, ცოცხლად. ზომიერად გამოიყენე ემოჯი. მოკლედ, მაგრამ გულთბილად.'
 
-export type AutoReply = { handoff: boolean; text: string }
+export type Decision = {
+  reply: string
+  handoff: boolean
+  intent: string
+  interest_level: 'weak' | 'medium' | 'high'
+  signals: LeadSignals
+  offered_consultation: boolean
+  opt_out: boolean
+}
 
-export async function generateReply(
+const FALLBACK: Decision = {
+  reply: DEFAULT_HOLDING,
+  handoff: true,
+  intent: 'unknown',
+  interest_level: 'weak',
+  signals: {},
+  offered_consultation: false,
+  opt_out: false,
+}
+
+export async function generateDecision(
   knowledge: string,
   tone: string,
   transcript: string,
-  alreadyGreeted: boolean
-): Promise<AutoReply> {
-  if (!process.env.GEMINI_API_KEY) return { handoff: true, text: DEFAULT_HOLDING }
+  alreadyGreeted: boolean,
+  offersMade: number
+): Promise<Decision> {
+  if (!process.env.GEMINI_API_KEY) return FALLBACK
 
-  // Only greet/introduce on the very first reply. After that, re-greeting looks
-  // robotic and the model tends to loop on its own past greetings.
   const greetingRule = alreadyGreeted
-    ? `2. You have ALREADY greeted and introduced yourself earlier in this conversation. Do NOT greet again, do NOT re-introduce the business, do NOT repeat a previous reply. Just answer the customer's latest message directly and move the conversation forward.`
-    : `2. This is your first reply: greet warmly, briefly introduce the business by name (from the information), then address their message.`
+    ? `You have ALREADY greeted and introduced yourself earlier. Do NOT greet again, do NOT re-introduce the business, do NOT repeat a previous reply — answer the latest message directly and move the conversation forward.`
+    : `This is your first reply: greet warmly, briefly introduce the business by name (from the information), then address the message.`
 
-  const systemInstruction = `You are the official customer-facing assistant of a business, replying to inbound Messenger/Instagram messages on its behalf. You must sound like a real, warm human representative — never robotic, never a bare one-word reply.
+  const capRule =
+    offersMade >= 2
+      ? `You have already offered a free consultation ${offersMade} times in this thread — do NOT offer it again unless the customer just gave a strong new buying signal.`
+      : `You may offer a free consultation when it fits (see interest rules).`
 
-# VOICE / TONE (how you must speak)
+  const systemInstruction = `You are the official customer-facing assistant of a business, replying to inbound Messenger/Instagram messages. Sound like a real, warm human rep — never robotic.
+
+# VOICE / TONE
 ${tone?.trim() || DEFAULT_TONE}
 
-# COMPANY INFORMATION (the only source of facts you may use)
+# COMPANY INFORMATION (the only source of facts)
 ${knowledge?.trim() || '(the business has not provided information yet)'}
 
-# HOW TO BEHAVE
-1. Reply in the SAME language the customer wrote in (usually Georgian).
-${greetingRule}
-3. ALWAYS actually answer the customer's LATEST message. If they asked a question that the information covers (e.g. a price that is listed), ANSWER IT directly — never deflect a real question with another greeting.
-4. CONVERSATIONAL / VAGUE messages ("can you help me?", "I have a question", "are you there?"): stay engaged — warmly say yes and ask what specifically they need. NEVER hand these off.
-5. SPECIFIC QUESTIONS: answer using ONLY the company information. Never invent or guess prices, timelines, availability, or promises that aren't written there.
-6. Do NOT repeat yourself. Read the conversation; never send the same reply twice.
-7. HAND OFF ONLY when the customer asks for a SPECIFIC fact or commitment that is genuinely not in the information — a price or timeframe that isn't listed, a booking/scheduling, a complaint, or an account/personal matter. When (and only when) that happens, output on the FIRST line exactly:
-${HANDOFF}
-and then, on the next line, a short warm holding message in the customer's language telling them a colleague will get back to them shortly. Do NOT invent the missing answer.`
+# REPLY RULES
+1. Reply in the customer's language (usually Georgian).
+2. ${greetingRule}
+3. Always ANSWER the customer's latest message. Never deflect a real question with a greeting. Never repeat yourself. Never invent prices/timelines/facts not in the information.
+4. Vague/conversational messages ("can you help?", "I have a question"): stay engaged, ask what they need. Do NOT hand off these.
+5. Interest handling:
+   - WEAK interest (general question): answer + at most ONE relevant follow-up question. No pushy selling.
+   - MEDIUM interest (describes a need, asks price/timeline): clarify the need, then it's fine to offer a free consultation.
+   - HIGH interest ("I want a consultation", "call me", "how do we start", gives their number): go straight to offering/arranging the consultation — no extra selling.
+6. ${capRule}
+7. HAND OFF only when the customer asks for a SPECIFIC fact/commitment genuinely NOT in the information (a price/timeframe not listed, a booking, a complaint, an account/personal matter). When handing off, set handoff=true and make "reply" a short warm holding message (a colleague will reply shortly). Do NOT invent the answer.
+8. If the customer asks to stop being messaged, set opt_out=true and reply with a brief polite acknowledgement.
+
+# OUTPUT — return ONLY this JSON object, nothing else:
+{
+  "reply": "the message to send the customer, in their language",
+  "handoff": false,
+  "opt_out": false,
+  "intent": "short label e.g. greeting | pricing_question | timeline_question | consultation_request | service_question | complaint | other",
+  "interest_level": "weak | medium | high",
+  "offered_consultation": false,
+  "signals": {
+    "explicit_consultation_request": false,
+    "requested_call_or_meeting": false,
+    "gave_contact": false,
+    "asked_price": false,
+    "asked_timeline": false,
+    "described_problem": false,
+    "stated_budget": false,
+    "is_decision_maker": false,
+    "urgent": false,
+    "multiple_questions": false,
+    "weak_interest": false,
+    "not_interested": false,
+    "opt_out": false,
+    "irrelevant": false
+  }
+}
+Set each signal true ONLY if it genuinely holds for the LATEST customer message. Negation wins: "I do NOT want a consultation" means explicit_consultation_request=false and not_interested=true. "offered_consultation" must be true only if YOUR reply actually offers a consultation.`
 
   const contents = `Conversation so far (most recent last):
 
 ${transcript || '(empty)'}
 
-Write your reply to the customer's LAST message now, following the rules and tone. Answer their actual message — do not just greet.`
+Decide and reply to the customer's LAST message. Return only the JSON object.`
 
   try {
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
     const res = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents,
-      config: { systemInstruction, temperature: 0.5 },
+      config: {
+        systemInstruction,
+        temperature: 0.5,
+        responseMimeType: 'application/json',
+      },
     })
     const raw = (res.text ?? '').trim()
-
-    if (raw.includes(HANDOFF)) {
-      // The model chose to hand off; whatever it wrote after the token is the
-      // warm holding message we send the customer before a human takes over.
-      const holding = raw.replace(HANDOFF, '').trim()
-      return { handoff: true, text: holding || DEFAULT_HOLDING }
+    const parsed = JSON.parse(raw) as Partial<Decision>
+    const reply = (parsed.reply ?? '').trim()
+    if (!reply) return FALLBACK
+    return {
+      reply,
+      handoff: !!parsed.handoff,
+      intent: parsed.intent ?? 'other',
+      interest_level:
+        parsed.interest_level === 'high' || parsed.interest_level === 'medium'
+          ? parsed.interest_level
+          : 'weak',
+      signals: parsed.signals ?? {},
+      offered_consultation: !!parsed.offered_consultation,
+      opt_out: !!parsed.opt_out || !!parsed.signals?.opt_out,
     }
-    if (!raw) return { handoff: true, text: DEFAULT_HOLDING }
-    return { handoff: false, text: raw }
   } catch {
-    return { handoff: true, text: DEFAULT_HOLDING }
+    return FALLBACK
   }
 }

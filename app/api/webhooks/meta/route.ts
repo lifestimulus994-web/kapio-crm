@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { verifySignature, fetchLeadFields, fetchUserName, sendMessage } from '@/lib/meta'
-import { generateReply } from '@/lib/inbox-ai'
+import { generateDecision } from '@/lib/inbox-ai'
+import { scoreDelta } from '@/lib/lead-score'
 import { notifyWorkspace } from '@/lib/notify'
 
 export const dynamic = 'force-dynamic'
@@ -174,7 +175,7 @@ async function maybeAutoReply(
 
   const { data: convo } = await supabase
     .from('conversations')
-    .select('ai_enabled')
+    .select('ai_enabled, lead_score, consultation_offers')
     .eq('id', convoId)
     .maybeSingle()
   if (!convo?.ai_enabled) return 'off' // a human has taken this thread over
@@ -189,58 +190,70 @@ async function maybeAutoReply(
     .filter((m) => m.body)
     .map((m) => `${m.direction === 'in' ? 'Customer' : 'Us'}: ${m.body}`)
     .join('\n')
-
-  // If we've replied before in this thread, tell the AI not to re-greet.
   const alreadyGreeted = (msgs ?? []).some((m) => m.direction === 'out')
 
-  const { handoff, text } = await generateReply(
+  const decision = await generateDecision(
     settings.knowledge,
     settings.tone ?? '',
     transcript,
-    alreadyGreeted
+    alreadyGreeted,
+    convo.consultation_offers ?? 0
   )
 
-  if (handoff) {
-    // AI can't answer — send the warm holding message it wrote (so the customer
-    // isn't left on silence), then flag the thread for a human. Don't guess.
-    if (text) {
-      try {
-        await sendMessage(psid, text, conn.access_token)
-        await supabase.from('messages').insert({
-          conversation_id: convoId,
-          workspace_id: conn.workspace_id,
-          direction: 'out',
-          body: text,
-        })
-      } catch (e) {
-        console.error('[auto-reply] holding send failed', e)
-      }
+  // Deterministic lead score from the signals the AI extracted (not its guess).
+  const clamp = (n: number) => Math.max(-1000, Math.min(1000, n))
+  const now = new Date().toISOString()
+  const baseUpdate: Record<string, unknown> = {
+    lead_score: clamp((convo.lead_score ?? 0) + scoreDelta(decision.signals)),
+    intent: decision.intent,
+    interest_level: decision.interest_level,
+    consultation_offers: (convo.consultation_offers ?? 0) + (decision.offered_consultation ? 1 : 0),
+    last_message_at: now,
+    last_message_preview: decision.reply.slice(0, 200),
+  }
+  if (decision.opt_out) {
+    baseUpdate.opted_out = true
+    baseUpdate.ai_enabled = false // stop the bot for someone who opted out
+  }
+
+  const send = async (): Promise<boolean> => {
+    try {
+      await sendMessage(psid, decision.reply, conn.access_token)
+      await supabase.from('messages').insert({
+        conversation_id: convoId,
+        workspace_id: conn.workspace_id,
+        direction: 'out',
+        body: decision.reply,
+      })
+      return true
+    } catch (e) {
+      console.error('[auto-reply] send failed', e)
+      return false
     }
-    await supabase.from('conversations').update({ needs_human: true, unread: true }).eq('id', convoId)
+  }
+
+  if (decision.handoff) {
+    // Send the warm holding line so the customer isn't left silent, then flag
+    // the thread for a human.
+    await send()
+    await supabase
+      .from('conversations')
+      .update({ ...baseUpdate, needs_human: true, unread: true })
+      .eq('id', convoId)
     return 'handoff'
   }
 
-  try {
-    await sendMessage(psid, text, conn.access_token)
-  } catch (e) {
-    console.error('[auto-reply] send failed', e)
-    await supabase.from('conversations').update({ needs_human: true, unread: true }).eq('id', convoId)
+  const ok = await send()
+  if (!ok) {
+    await supabase
+      .from('conversations')
+      .update({ ...baseUpdate, needs_human: true, unread: true })
+      .eq('id', convoId)
     return 'handoff'
   }
-  await supabase.from('messages').insert({
-    conversation_id: convoId,
-    workspace_id: conn.workspace_id,
-    direction: 'out',
-    body: text,
-  })
   await supabase
     .from('conversations')
-    .update({
-      last_message_at: new Date().toISOString(),
-      last_message_preview: text.slice(0, 200),
-      unread: false,
-      needs_human: false, // AI handled it — clear any earlier handoff flag
-    })
+    .update({ ...baseUpdate, unread: false, needs_human: false })
     .eq('id', convoId)
   return 'handled'
 }
