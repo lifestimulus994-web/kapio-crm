@@ -7,7 +7,6 @@ import { usePathname } from 'next/navigation'
 import { KanbanSquare, Building2, Users, ListTodo, UserCog, Target, Sparkles, Workflow, MessageSquare, Menu, X } from 'lucide-react'
 import VoiceImport from '@/components/VoiceImport'
 import LogoutButton from '@/components/LogoutButton'
-import NotificationBell from '@/components/NotificationBell'
 
 type NavItem = { href: string; label: string; Icon: typeof Sparkles }
 type NavGroup = { title?: string; items: NavItem[] }
@@ -120,16 +119,13 @@ export default function Sidebar({
             />
             <span className="text-base font-semibold text-slate-100">Kapio CRM</span>
           </div>
-          <div className="flex items-center gap-1">
-            <NotificationBell />
-            <button
-              onClick={() => setOpen(false)}
-              className="rounded-lg p-1 text-slate-400 hover:bg-slate-800 lg:hidden"
-              aria-label="Close menu"
-            >
-              <X size={18} />
-            </button>
-          </div>
+          <button
+            onClick={() => setOpen(false)}
+            className="rounded-lg p-1 text-slate-400 hover:bg-slate-800 lg:hidden"
+            aria-label="Close menu"
+          >
+            <X size={18} />
+          </button>
         </div>
 
         {/* Voice note → CRM */}
