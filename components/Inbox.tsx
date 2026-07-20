@@ -100,6 +100,7 @@ export default function Inbox() {
   const [showAi, setShowAi] = useState(false)
   const [aiEnabled, setAiEnabled] = useState(false)
   const [knowledge, setKnowledge] = useState('')
+  const [tone, setTone] = useState('')
   const [savingAi, setSavingAi] = useState(false)
   const [savedAi, setSavedAi] = useState(false)
   const threadRef = useRef<HTMLDivElement>(null)
@@ -145,6 +146,7 @@ export default function Inbox() {
       const d = await res.json()
       setAiEnabled(!!d.ai_enabled)
       setKnowledge(d.knowledge ?? '')
+      setTone(d.tone ?? '')
     } catch {
       /* ignore */
     }
@@ -161,7 +163,7 @@ export default function Inbox() {
       const res = await fetch('/api/inbox/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ai_enabled: aiEnabled, knowledge }),
+        body: JSON.stringify({ ai_enabled: aiEnabled, knowledge, tone }),
       })
       if (res.ok) {
         setSavedAi(true)
@@ -371,6 +373,21 @@ export default function Inbox() {
                     <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${aiEnabled ? 'left-[22px]' : 'left-0.5'}`} />
                   </button>
                 </label>
+
+                <div className="mb-1.5 text-xs font-medium text-slate-300">
+                  ტონი / პიროვნება
+                </div>
+                <p className="mb-2 text-[11px] leading-snug text-slate-500">
+                  როგორ უნდა ილაპარაკოს AI-მ — ხასიათი, თბილობა, ემოჯი, კომპანიის სახელი.
+                </p>
+                <textarea
+                  value={tone}
+                  onChange={(e) => setTone(e.target.value)}
+                  rows={3}
+                  placeholder="მაგ: თბილი, მეგობრული, პროფესიონალი. მიმართე „თქვენ“. ზომიერი ემოჯი. ყოველთვის დაასახელე Onyx Studio."
+                  className="mb-4 w-full resize-y rounded-lg border border-slate-700 bg-slate-900 px-3 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:border-emerald-600 focus:outline-none"
+                  style={{ fontFamily: 'var(--font-geist-sans), var(--font-firago), sans-serif', letterSpacing: 'normal' }}
+                />
 
                 <div className="mb-1.5 text-xs font-medium text-slate-300">
                   კომპანიის ინფორმაცია

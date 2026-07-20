@@ -12,13 +12,14 @@ export async function GET() {
 
   const { data } = await supabase
     .from('inbox_settings')
-    .select('ai_enabled, knowledge')
+    .select('ai_enabled, knowledge, tone')
     .eq('workspace_id', me.workspace_id)
     .maybeSingle()
 
   return NextResponse.json({
     ai_enabled: data?.ai_enabled ?? false,
     knowledge: data?.knowledge ?? '',
+    tone: data?.tone ?? '',
   })
 }
 
@@ -26,7 +27,7 @@ export async function POST(req: Request) {
   const me = await getCurrentMember()
   if (!me) return NextResponse.json({ error: 'შესვლა საჭიროა' }, { status: 401 })
 
-  let body: { ai_enabled?: boolean; knowledge?: string }
+  let body: { ai_enabled?: boolean; knowledge?: string; tone?: string }
   try {
     body = await req.json()
   } catch {
@@ -38,6 +39,7 @@ export async function POST(req: Request) {
       workspace_id: me.workspace_id,
       ai_enabled: !!body.ai_enabled,
       knowledge: typeof body.knowledge === 'string' ? body.knowledge : '',
+      tone: typeof body.tone === 'string' ? body.tone : '',
       updated_at: new Date().toISOString(),
     },
     { onConflict: 'workspace_id' }

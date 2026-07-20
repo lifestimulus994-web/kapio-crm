@@ -167,7 +167,7 @@ async function maybeAutoReply(
 ): Promise<AutoOutcome> {
   const { data: settings } = await supabase
     .from('inbox_settings')
-    .select('ai_enabled, knowledge')
+    .select('ai_enabled, knowledge, tone')
     .eq('workspace_id', conn.workspace_id)
     .maybeSingle()
   if (!settings?.ai_enabled) return 'off'
@@ -190,10 +190,24 @@ async function maybeAutoReply(
     .map((m) => `${m.direction === 'in' ? 'Customer' : 'Us'}: ${m.body}`)
     .join('\n')
 
-  const { handoff, text } = await generateReply(settings.knowledge, transcript)
+  const { handoff, text } = await generateReply(settings.knowledge, settings.tone ?? '', transcript)
 
-  if (handoff || !text) {
-    // AI couldn't answer — leave it for a human, don't guess.
+  if (handoff) {
+    // AI can't answer — send the warm holding message it wrote (so the customer
+    // isn't left on silence), then flag the thread for a human. Don't guess.
+    if (text) {
+      try {
+        await sendMessage(psid, text, conn.access_token)
+        await supabase.from('messages').insert({
+          conversation_id: convoId,
+          workspace_id: conn.workspace_id,
+          direction: 'out',
+          body: text,
+        })
+      } catch (e) {
+        console.error('[auto-reply] holding send failed', e)
+      }
+    }
     await supabase.from('conversations').update({ needs_human: true, unread: true }).eq('id', convoId)
     return 'handoff'
   }
