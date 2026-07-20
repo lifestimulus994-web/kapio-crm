@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
 import { usePathname } from 'next/navigation'
@@ -49,6 +49,30 @@ export default function Sidebar({
 }) {
   const pathname = usePathname()
   const [open, setOpen] = useState(false)
+
+  // Badge on "შემოსული": how many conversations need attention (unread or
+  // flagged for a human). Polled so it updates as messages arrive.
+  const [inboxCount, setInboxCount] = useState(0)
+  useEffect(() => {
+    let alive = true
+    const load = async () => {
+      try {
+        const res = await fetch('/api/inbox/count', { cache: 'no-store' })
+        if (!res.ok) return
+        const d = await res.json()
+        if (alive) setInboxCount(d.count ?? 0)
+      } catch {
+        /* ignore */
+      }
+    }
+    load()
+    const t = setInterval(load, 15000)
+    return () => {
+      alive = false
+      clearInterval(t)
+    }
+  }, [pathname])
+
   const renderGroups: NavGroup[] = isOwner
     ? [...groups, { title: 'მართვა', items: [{ href: '/team', label: 'გუნდი', Icon: UserCog }] }]
     : groups
@@ -134,7 +158,12 @@ export default function Sidebar({
                       }`}
                     >
                       <Icon size={18} />
-                      {label}
+                      <span className="flex-1">{label}</span>
+                      {href === '/inbox' && inboxCount > 0 && (
+                        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-emerald-600 px-1.5 text-[10px] font-semibold text-white">
+                          {inboxCount > 99 ? '99+' : inboxCount}
+                        </span>
+                      )}
                     </Link>
                   )
                 })}
