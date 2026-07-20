@@ -108,6 +108,13 @@ export default function Inbox() {
   const [aiEnabled, setAiEnabled] = useState(false)
   const [knowledge, setKnowledge] = useState('')
   const [tone, setTone] = useState('')
+  const [booking, setBooking] = useState({
+    enabled: false,
+    minutes: 30,
+    days: '1,2,3,4,5',
+    start: '10:00',
+    end: '19:00',
+  })
   const [savingAi, setSavingAi] = useState(false)
   const [savedAi, setSavedAi] = useState(false)
   const threadRef = useRef<HTMLDivElement>(null)
@@ -154,6 +161,13 @@ export default function Inbox() {
       setAiEnabled(!!d.ai_enabled)
       setKnowledge(d.knowledge ?? '')
       setTone(d.tone ?? '')
+      setBooking({
+        enabled: !!d.booking_enabled,
+        minutes: d.consult_minutes ?? 30,
+        days: d.work_days ?? '1,2,3,4,5',
+        start: d.work_start ?? '10:00',
+        end: d.work_end ?? '19:00',
+      })
     } catch {
       /* ignore */
     }
@@ -170,7 +184,16 @@ export default function Inbox() {
       const res = await fetch('/api/inbox/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ai_enabled: aiEnabled, knowledge, tone }),
+        body: JSON.stringify({
+          ai_enabled: aiEnabled,
+          knowledge,
+          tone,
+          booking_enabled: booking.enabled,
+          consult_minutes: booking.minutes,
+          work_days: booking.days,
+          work_start: booking.start,
+          work_end: booking.end,
+        }),
       })
       if (res.ok) {
         setSavedAi(true)
@@ -412,6 +435,89 @@ export default function Inbox() {
                   className="w-full resize-y rounded-lg border border-slate-700 bg-slate-900 px-3 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:border-emerald-600 focus:outline-none"
                   style={{ fontFamily: 'var(--font-geist-sans), var(--font-firago), sans-serif', letterSpacing: 'normal' }}
                 />
+
+                {/* Booking */}
+                <div className="mt-4 border-t border-slate-700 pt-4">
+                  <label className="mb-3 flex cursor-pointer items-center justify-between">
+                    <span className="text-sm text-slate-200">კონსულტაციის დაჯავშნა ჩატში</span>
+                    <button
+                      type="button"
+                      onClick={() => setBooking((v) => ({ ...v, enabled: !v.enabled }))}
+                      className={`relative h-6 w-11 flex-none rounded-full transition-colors ${booking.enabled ? 'bg-emerald-600' : 'bg-slate-600'}`}
+                    >
+                      <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${booking.enabled ? 'left-[22px]' : 'left-0.5'}`} />
+                    </button>
+                  </label>
+
+                  {booking.enabled && (
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-3">
+                        <label className="flex-1 text-xs text-slate-400">
+                          ხანგრძლივობა (წთ)
+                          <input
+                            type="number"
+                            value={booking.minutes}
+                            min={10}
+                            step={5}
+                            onChange={(e) => setBooking((v) => ({ ...v, minutes: Number(e.target.value) || 30 }))}
+                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-sm text-slate-100 focus:border-emerald-600 focus:outline-none"
+                          />
+                        </label>
+                        <label className="flex-1 text-xs text-slate-400">
+                          დაწყება
+                          <input
+                            type="time"
+                            value={booking.start}
+                            onChange={(e) => setBooking((v) => ({ ...v, start: e.target.value }))}
+                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-sm text-slate-100 focus:border-emerald-600 focus:outline-none"
+                          />
+                        </label>
+                        <label className="flex-1 text-xs text-slate-400">
+                          დასრულება
+                          <input
+                            type="time"
+                            value={booking.end}
+                            onChange={(e) => setBooking((v) => ({ ...v, end: e.target.value }))}
+                            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-sm text-slate-100 focus:border-emerald-600 focus:outline-none"
+                          />
+                        </label>
+                      </div>
+                      <div>
+                        <div className="mb-1.5 text-xs text-slate-400">სამუშაო დღეები</div>
+                        <div className="flex gap-1">
+                          {[
+                            ['1', 'ორ'], ['2', 'სა'], ['3', 'ოთ'], ['4', 'ხუ'],
+                            ['5', 'პა'], ['6', 'შა'], ['7', 'კვ'],
+                          ].map(([num, label]) => {
+                            const set = new Set(booking.days.split(',').filter(Boolean))
+                            const on = set.has(num)
+                            return (
+                              <button
+                                key={num}
+                                type="button"
+                                onClick={() => {
+                                  const s = new Set(booking.days.split(',').filter(Boolean))
+                                  if (s.has(num)) s.delete(num)
+                                  else s.add(num)
+                                  const ordered = ['1', '2', '3', '4', '5', '6', '7'].filter((d) => s.has(d))
+                                  setBooking((v) => ({ ...v, days: ordered.join(',') }))
+                                }}
+                                className={`flex-1 rounded-lg py-1.5 text-xs font-medium transition-colors ${
+                                  on ? 'bg-emerald-600 text-white' : 'bg-slate-900 text-slate-400 hover:bg-slate-700'
+                                }`}
+                              >
+                                {label}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                      <p className="text-[10px] leading-snug text-slate-500">
+                        AI შესთავაზებს რეალურ თავისუფალ დროს (კალენდარი მინუს დაკავებული), დაჯავშნის → ჩანს /დავალებები კალენდარში.
+                      </p>
+                    </div>
+                  )}
+                </div>
 
                 <div className="mt-4 flex items-center justify-between">
                   <span className="text-[11px] text-slate-500">

@@ -1,8 +1,16 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { verifySignature, fetchLeadFields, fetchUserName, sendMessage } from '@/lib/meta'
-import { generateDecision } from '@/lib/inbox-ai'
+import { generateDecision, type BookingContext } from '@/lib/inbox-ai'
 import { scoreDelta } from '@/lib/lead-score'
+import {
+  getAvailableSlots,
+  isSlotFree,
+  createBooking,
+  slotLabel,
+  slotsOfferMessage,
+  type BookingConfig,
+} from '@/lib/booking'
 import { notifyWorkspace } from '@/lib/notify'
 
 export const dynamic = 'force-dynamic'
@@ -168,14 +176,18 @@ async function maybeAutoReply(
 ): Promise<AutoOutcome> {
   const { data: settings } = await supabase
     .from('inbox_settings')
-    .select('ai_enabled, knowledge, tone')
+    .select(
+      'ai_enabled, knowledge, tone, booking_enabled, consult_minutes, work_days, work_start, work_end, buffer_minutes, min_notice_hours'
+    )
     .eq('workspace_id', conn.workspace_id)
     .maybeSingle()
   if (!settings?.ai_enabled) return 'off'
 
   const { data: convo } = await supabase
     .from('conversations')
-    .select('ai_enabled, lead_score, consultation_offers')
+    .select(
+      'ai_enabled, lead_score, consultation_offers, booking_stage, booking_name, booking_phone, proposed_slots, chosen_slot, booking_task_id, name'
+    )
     .eq('id', convoId)
     .maybeSingle()
   if (!convo?.ai_enabled) return 'off' // a human has taken this thread over
@@ -192,12 +204,24 @@ async function maybeAutoReply(
     .join('\n')
   const alreadyGreeted = (msgs ?? []).some((m) => m.direction === 'out')
 
+  const proposedLabels = Array.isArray(convo.proposed_slots)
+    ? (convo.proposed_slots as string[]).map((s) => slotLabel(s))
+    : []
+  const bookingCtx: BookingContext = {
+    enabled: !!settings.booking_enabled,
+    stage: convo.booking_stage ?? 'none',
+    knownName: convo.booking_name ?? null,
+    knownPhone: convo.booking_phone ?? null,
+    proposedSlots: proposedLabels,
+  }
+
   const decision = await generateDecision(
     settings.knowledge,
     settings.tone ?? '',
     transcript,
     alreadyGreeted,
-    convo.consultation_offers ?? 0
+    convo.consultation_offers ?? 0,
+    bookingCtx
   )
 
   // Deterministic lead score from the signals the AI extracted (not its guess).
@@ -209,21 +233,20 @@ async function maybeAutoReply(
     interest_level: decision.interest_level,
     consultation_offers: (convo.consultation_offers ?? 0) + (decision.offered_consultation ? 1 : 0),
     last_message_at: now,
-    last_message_preview: decision.reply.slice(0, 200),
   }
   if (decision.opt_out) {
     baseUpdate.opted_out = true
     baseUpdate.ai_enabled = false // stop the bot for someone who opted out
   }
 
-  const send = async (): Promise<boolean> => {
+  const send = async (text: string): Promise<boolean> => {
     try {
-      await sendMessage(psid, decision.reply, conn.access_token)
+      await sendMessage(psid, text, conn.access_token)
       await supabase.from('messages').insert({
         conversation_id: convoId,
         workspace_id: conn.workspace_id,
         direction: 'out',
-        body: decision.reply,
+        body: text,
       })
       return true
     } catch (e) {
@@ -232,30 +255,205 @@ async function maybeAutoReply(
     }
   }
 
+  // ---- Booking state machine (deterministic times; overrides the reply) ----
+  if (settings.booking_enabled && !decision.opt_out) {
+    const booking = await runBooking(conn, convo, decision, settings)
+    if (booking) {
+      const ok = await send(booking.text)
+      await supabase
+        .from('conversations')
+        .update({
+          ...baseUpdate,
+          ...booking.convoUpdate,
+          last_message_preview: booking.text.slice(0, 200),
+          unread: booking.needsHuman ? true : !ok,
+          needs_human: booking.needsHuman || !ok,
+        })
+        .eq('id', convoId)
+      return ok ? booking.outcome : 'handoff'
+    }
+  }
+
+  // ---- Normal path ----
   if (decision.handoff) {
-    // Send the warm holding line so the customer isn't left silent, then flag
-    // the thread for a human.
-    await send()
+    await send(decision.reply)
     await supabase
       .from('conversations')
-      .update({ ...baseUpdate, needs_human: true, unread: true })
+      .update({ ...baseUpdate, last_message_preview: decision.reply.slice(0, 200), needs_human: true, unread: true })
       .eq('id', convoId)
     return 'handoff'
   }
 
-  const ok = await send()
+  const ok = await send(decision.reply)
   if (!ok) {
     await supabase
       .from('conversations')
-      .update({ ...baseUpdate, needs_human: true, unread: true })
+      .update({ ...baseUpdate, last_message_preview: decision.reply.slice(0, 200), needs_human: true, unread: true })
       .eq('id', convoId)
     return 'handoff'
   }
   await supabase
     .from('conversations')
-    .update({ ...baseUpdate, unread: false, needs_human: false })
+    .update({ ...baseUpdate, last_message_preview: decision.reply.slice(0, 200), unread: false, needs_human: false })
     .eq('id', convoId)
   return 'handled'
+}
+
+// --- Booking state machine --------------------------------------------------
+// Returns a deterministic booking reply + conversation updates, or null when
+// booking isn't the active concern this turn (fall through to the AI reply).
+type BookingConvo = {
+  booking_stage: string | null
+  booking_name: string | null
+  booking_phone: string | null
+  proposed_slots: unknown
+  chosen_slot: string | null
+  booking_task_id: string | null
+  name: string | null
+}
+type BookingResult = {
+  text: string
+  convoUpdate: Record<string, unknown>
+  outcome: AutoOutcome
+  needsHuman?: boolean
+}
+type BookingSettings = {
+  consult_minutes: number
+  work_days: string
+  work_start: string
+  work_end: string
+  buffer_minutes: number
+  min_notice_hours: number
+}
+
+async function runBooking(
+  conn: Connection,
+  convo: BookingConvo,
+  decision: Awaited<ReturnType<typeof generateDecision>>,
+  settings: BookingSettings
+): Promise<BookingResult | null> {
+  const b = decision.booking
+  const stage = convo.booking_stage ?? 'none'
+  const cfg: BookingConfig = {
+    consultMinutes: settings.consult_minutes ?? 30,
+    workDays: new Set(
+      (settings.work_days ?? '1,2,3,4,5').split(',').map(Number).filter((n) => n >= 1 && n <= 7)
+    ),
+    workStart: settings.work_start ?? '10:00',
+    workEnd: settings.work_end ?? '19:00',
+    bufferMinutes: settings.buffer_minutes ?? 0,
+    minNoticeHours: settings.min_notice_hours ?? 2,
+  }
+  const name = b.name || convo.booking_name || null
+  const phone = b.phone || convo.booking_phone || null
+  const slots = Array.isArray(convo.proposed_slots) ? (convo.proposed_slots as string[]) : []
+
+  // Customer backed out of an active booking.
+  if (b.cancel && (stage === 'proposed' || stage === 'awaiting_confirm')) {
+    return {
+      text: decision.reply,
+      convoUpdate: { booking_stage: 'none', chosen_slot: null },
+      outcome: 'handled',
+    }
+  }
+
+  // Confirm -> create the appointment (idempotent + re-validate the slot).
+  if (stage === 'awaiting_confirm' && b.confirmed && convo.chosen_slot) {
+    if (convo.booking_task_id) {
+      return { text: 'თქვენი ჯავშანი უკვე დადასტურებულია ✅', convoUpdate: {}, outcome: 'handled' }
+    }
+    const chosenIso = convo.chosen_slot
+    const free = await isSlotFree(conn.workspace_id, chosenIso, cfg.consultMinutes)
+    if (!free) {
+      const fresh = await getAvailableSlots(conn.workspace_id, cfg, 4)
+      if (!fresh.length) {
+        return {
+          text: 'ბოდიში, ეს დრო ამასობაში დაიკავეს და ახლა თავისუფალი დრო ვერ ვნახე. კოლეგა მალე დაგიკავშირდებათ 🙏',
+          convoUpdate: { booking_stage: 'none', chosen_slot: null },
+          outcome: 'handoff',
+          needsHuman: true,
+        }
+      }
+      return {
+        text: `ბოდიში, ეს დრო ამასობაში დაიკავეს. ${slotsOfferMessage(fresh)}`,
+        convoUpdate: { booking_stage: 'proposed', proposed_slots: fresh, chosen_slot: null },
+        outcome: 'handled',
+      }
+    }
+    const taskId = await createBooking({
+      workspaceId: conn.workspace_id,
+      assignedTo: null,
+      name: name || convo.name || 'კლიენტი',
+      phone,
+      slotIso: chosenIso,
+      consultMinutes: cfg.consultMinutes,
+      source: 'Messenger',
+    })
+    if (!taskId) {
+      return {
+        text: 'ჯავშნისას ტექნიკური შეფერხება მოხდა. კოლეგა მალე დაგიკავშირდებათ 🙏',
+        convoUpdate: {},
+        outcome: 'handoff',
+        needsHuman: true,
+      }
+    }
+    return {
+      text: `დაჯავშნილია ✅\n📅 ${slotLabel(chosenIso)} (თბილისის დროით)\n⏱ ${cfg.consultMinutes} წუთი\n\nმადლობა! შეხვედრამდე დაგიკავშირდებით.`,
+      convoUpdate: {
+        booking_stage: 'booked',
+        booking_task_id: taskId,
+        booking_name: name,
+        booking_phone: phone,
+      },
+      outcome: 'handled',
+    }
+  }
+
+  // Customer picked one of the offered slots -> ask to confirm.
+  if (stage === 'proposed' && b.slot_choice && slots.length) {
+    const chosen = slots[b.slot_choice - 1]
+    if (chosen) {
+      return {
+        text: `ვადასტურებ: ${slotLabel(chosen)} (თბილისის დროით), ${cfg.consultMinutes} წუთი. დავჯავშნო? (კი / არა)`,
+        convoUpdate: { booking_stage: 'awaiting_confirm', chosen_slot: chosen },
+        outcome: 'handled',
+      }
+    }
+    return null // unclear choice — let the AI ask again
+  }
+
+  // Start: customer wants a consultation.
+  if ((stage === 'none' || stage === 'collecting') && b.wants_booking) {
+    if (!name || !phone) {
+      // Still missing name/phone — the AI's reply asks for it; remember what we have.
+      return {
+        text: decision.reply,
+        convoUpdate: { booking_stage: 'collecting', booking_name: name, booking_phone: phone },
+        outcome: 'handled',
+      }
+    }
+    const fresh = await getAvailableSlots(conn.workspace_id, cfg, 4)
+    if (!fresh.length) {
+      return {
+        text: 'ამ მომენტისთვის თავისუფალი დრო ვერ ვნახე — კოლეგა მალე დაგიკავშირდებათ ხელმისაწვდომ დროსთან დაკავშირებით 🙏',
+        convoUpdate: { booking_stage: 'collecting', booking_name: name, booking_phone: phone },
+        outcome: 'handoff',
+        needsHuman: true,
+      }
+    }
+    return {
+      text: slotsOfferMessage(fresh),
+      convoUpdate: {
+        booking_stage: 'proposed',
+        proposed_slots: fresh,
+        booking_name: name,
+        booking_phone: phone,
+      },
+      outcome: 'handled',
+    }
+  }
+
+  return null // booking not active this turn
 }
 
 // --- Lead Ads --------------------------------------------------------------
