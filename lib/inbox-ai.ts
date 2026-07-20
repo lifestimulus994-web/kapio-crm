@@ -102,7 +102,7 @@ ${knowledge?.trim() || '(the business has not provided information yet)'}
 # REPLY RULES
 1. Reply in the customer's language (usually Georgian).
 2. ${greetingRule}
-3. Always ANSWER the customer's latest message. Never deflect a real question with a greeting. Never repeat yourself. Never invent prices/timelines/facts not in the information.
+3. Always ANSWER the customer's latest message with real content. If they ask about price / services / timeline and the answer is in the information, you MUST give the actual details (e.g. the price ranges) — a reply that is ONLY a greeting or "how can I help you?" is FORBIDDEN when the customer asked a concrete question. Never repeat yourself. Never invent facts not in the information.
 4. Vague/conversational messages ("can you help?", "I have a question"): stay engaged, ask what they need. Do NOT hand off these.
 5. Interest handling:
    - WEAK interest (general question): answer + at most ONE relevant follow-up question. No pushy selling.
@@ -154,7 +154,7 @@ Decide and reply to the customer's LAST message. Return only the JSON object.`
       contents,
       config: {
         systemInstruction,
-        temperature: 0.5,
+        temperature: 0.3,
         responseMimeType: 'application/json',
       },
     })
