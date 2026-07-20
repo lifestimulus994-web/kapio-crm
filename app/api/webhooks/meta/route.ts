@@ -190,7 +190,15 @@ async function maybeAutoReply(
     .map((m) => `${m.direction === 'in' ? 'Customer' : 'Us'}: ${m.body}`)
     .join('\n')
 
-  const { handoff, text } = await generateReply(settings.knowledge, settings.tone ?? '', transcript)
+  // If we've replied before in this thread, tell the AI not to re-greet.
+  const alreadyGreeted = (msgs ?? []).some((m) => m.direction === 'out')
+
+  const { handoff, text } = await generateReply(
+    settings.knowledge,
+    settings.tone ?? '',
+    transcript,
+    alreadyGreeted
+  )
 
   if (handoff) {
     // AI can't answer — send the warm holding message it wrote (so the customer
@@ -231,6 +239,7 @@ async function maybeAutoReply(
       last_message_at: new Date().toISOString(),
       last_message_preview: text.slice(0, 200),
       unread: false,
+      needs_human: false, // AI handled it — clear any earlier handoff flag
     })
     .eq('id', convoId)
   return 'handled'
