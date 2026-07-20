@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { verifySignature, fetchLeadFields, fetchUserName, sendMessage } from '@/lib/meta'
 import { generateReply } from '@/lib/inbox-ai'
+import { notifyWorkspace } from '@/lib/notify'
 
 export const dynamic = 'force-dynamic'
 // Meta expects a fast 200; heavy work (Graph fetches) is kept minimal. A tenant
@@ -126,28 +127,57 @@ async function handleMessaging(conn: Connection, ev: MessagingEvent) {
     })
   }
 
-  // Auto-reply (if the workspace enabled it and this thread isn't paused).
-  if (text) await maybeAutoReply(conn, convo.id, psid)
+  // Auto-reply (if enabled), then notify the team once — as "needs a human"
+  // when the AI handed off, otherwise as a plain new message. If the AI
+  // answered it fully, there's nothing for a human to do, so stay quiet.
+  const preview = text?.slice(0, 120) ?? null
+  const who = convo.name ?? 'ვინმემ'
+  if (text) {
+    const outcome = await maybeAutoReply(conn, convo.id, psid)
+    if (outcome === 'handoff') {
+      await notifyWorkspace({
+        workspaceId: conn.workspace_id,
+        type: 'handoff',
+        title: 'AI-მ გადმოამისამართა',
+        body: `${who}: ${preview ?? ''}`,
+        link: '/inbox',
+      })
+    } else if (outcome === 'off') {
+      await notifyWorkspace({
+        workspaceId: conn.workspace_id,
+        type: 'message',
+        title: 'ახალი მესიჯი',
+        body: `${who}: ${preview ?? ''}`,
+        link: '/inbox',
+      })
+    }
+  }
 }
+
+type AutoOutcome = 'handled' | 'handoff' | 'off'
 
 // --- AI auto-reply ---------------------------------------------------------
 // Answers an inbound message on the business's behalf when enabled. Sends only
 // if the AI is confident from the workspace knowledge; otherwise flags the
 // thread for a human instead of guessing.
-async function maybeAutoReply(conn: Connection, convoId: string, psid: string) {
+async function maybeAutoReply(
+  conn: Connection,
+  convoId: string,
+  psid: string
+): Promise<AutoOutcome> {
   const { data: settings } = await supabase
     .from('inbox_settings')
     .select('ai_enabled, knowledge')
     .eq('workspace_id', conn.workspace_id)
     .maybeSingle()
-  if (!settings?.ai_enabled) return
+  if (!settings?.ai_enabled) return 'off'
 
   const { data: convo } = await supabase
     .from('conversations')
     .select('ai_enabled')
     .eq('id', convoId)
     .maybeSingle()
-  if (!convo?.ai_enabled) return // a human has taken this thread over
+  if (!convo?.ai_enabled) return 'off' // a human has taken this thread over
 
   const { data: msgs } = await supabase
     .from('messages')
@@ -165,7 +195,7 @@ async function maybeAutoReply(conn: Connection, convoId: string, psid: string) {
   if (handoff || !text) {
     // AI couldn't answer — leave it for a human, don't guess.
     await supabase.from('conversations').update({ needs_human: true, unread: true }).eq('id', convoId)
-    return
+    return 'handoff'
   }
 
   try {
@@ -173,7 +203,7 @@ async function maybeAutoReply(conn: Connection, convoId: string, psid: string) {
   } catch (e) {
     console.error('[auto-reply] send failed', e)
     await supabase.from('conversations').update({ needs_human: true, unread: true }).eq('id', convoId)
-    return
+    return 'handoff'
   }
   await supabase.from('messages').insert({
     conversation_id: convoId,
@@ -189,6 +219,7 @@ async function maybeAutoReply(conn: Connection, convoId: string, psid: string) {
       unread: false,
     })
     .eq('id', convoId)
+  return 'handled'
 }
 
 // --- Lead Ads --------------------------------------------------------------
@@ -236,7 +267,7 @@ async function upsertConversation(
         unread: true,
       })
       .eq('id', existing.id)
-    return existing as { id: string }
+    return existing as { id: string; name: string | null }
   }
 
   const name = await fetchUserName(externalId, conn.access_token)
@@ -255,9 +286,9 @@ async function upsertConversation(
       last_message_preview: opts.preview?.slice(0, 200) ?? null,
       unread: true,
     })
-    .select('id')
+    .select('id, name')
     .single()
-  return created as { id: string }
+  return created as { id: string; name: string | null }
 }
 
 // --- Meta webhook payload shapes (only the fields we read) -----------------
