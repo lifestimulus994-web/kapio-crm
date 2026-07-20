@@ -153,14 +153,16 @@ async function draft(convo: Convo) {
   if (!process.env.GEMINI_API_KEY)
     return NextResponse.json({ error: 'AI არ არის კონფიგურირებული.' }, { status: 500 })
 
-  const { data: msgs } = await supabase
+  // Most recent 20 messages, chronological (ascending+limit returns the oldest).
+  const { data: recent } = await supabase
     .from('messages')
-    .select('direction, body')
+    .select('direction, body, created_at')
     .eq('conversation_id', convo.id)
-    .order('created_at', { ascending: true })
+    .order('created_at', { ascending: false })
     .limit(20)
 
-  const transcript = (msgs ?? [])
+  const transcript = (recent ?? [])
+    .reverse()
     .filter((m) => m.body)
     .map((m) => `${m.direction === 'in' ? 'კლიენტი' : 'ჩვენ'}: ${m.body}`)
     .join('\n')

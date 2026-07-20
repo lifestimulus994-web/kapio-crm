@@ -192,17 +192,22 @@ async function maybeAutoReply(
     .maybeSingle()
   if (!convo?.ai_enabled) return 'off' // a human has taken this thread over
 
-  const { data: msgs } = await supabase
+  // The MOST RECENT 20 messages, in chronological order. (Ordering ascending
+  // with a limit returns the OLDEST 20 — which froze the transcript on the
+  // early greetings once a thread passed 20 messages, so the AI never saw new
+  // questions and kept replying "გამარჯობა".)
+  const { data: recent } = await supabase
     .from('messages')
-    .select('direction, body')
+    .select('direction, body, created_at')
     .eq('conversation_id', convoId)
-    .order('created_at', { ascending: true })
+    .order('created_at', { ascending: false })
     .limit(20)
-  const transcript = (msgs ?? [])
+  const msgs = (recent ?? []).reverse()
+  const transcript = msgs
     .filter((m) => m.body)
     .map((m) => `${m.direction === 'in' ? 'Customer' : 'Us'}: ${m.body}`)
     .join('\n')
-  const alreadyGreeted = (msgs ?? []).some((m) => m.direction === 'out')
+  const alreadyGreeted = msgs.some((m) => m.direction === 'out')
 
   const proposedLabels = Array.isArray(convo.proposed_slots)
     ? (convo.proposed_slots as string[]).map((s) => slotLabel(s))
