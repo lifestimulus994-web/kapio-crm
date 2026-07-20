@@ -10,6 +10,8 @@ import {
   Megaphone,
   Check,
   Camera,
+  Plus,
+  Link2,
 } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -31,6 +33,7 @@ type Conversation = {
   lead_id: string | null
 }
 type Message = { id: string; direction: 'in' | 'out'; body: string | null; created_at: string }
+type Channel = { id: string; platform: string; page_name: string | null }
 
 const POLL_MS = 5000
 
@@ -81,6 +84,8 @@ export default function Inbox() {
   const [drafting, setDrafting] = useState(false)
   const [converting, setConverting] = useState(false)
   const [leadId, setLeadId] = useState<string | null>(null)
+  const [channels, setChannels] = useState<Channel[]>([])
+  const [showConnect, setShowConnect] = useState(false)
   const threadRef = useRef<HTMLDivElement>(null)
 
   const activeConvo = convos.find((c) => c.id === activeId) ?? null
@@ -101,6 +106,40 @@ export default function Inbox() {
     const t = setInterval(loadConvos, POLL_MS)
     return () => clearInterval(t)
   }, [loadConvos])
+
+  const loadChannels = useCallback(async () => {
+    try {
+      const res = await fetch('/api/channels', { cache: 'no-store' })
+      if (!res.ok) return
+      const data = await res.json()
+      setChannels(data.channels ?? [])
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  useEffect(() => {
+    loadChannels()
+  }, [loadChannels])
+
+  // Show the result of an OAuth connect round-trip (?connect=ok|error|…).
+  const [connectMsg, setConnectMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search).get('connect')
+    if (!p) return
+    const map: Record<string, { ok: boolean; text: string }> = {
+      ok: { ok: true, text: 'არხი დაკავშირდა ✅' },
+      nopages: { ok: false, text: 'გვერდი ვერ მოიძებნა ამ ექაუნთზე.' },
+      cancelled: { ok: false, text: 'დაკავშირება გაუქმდა.' },
+      error: { ok: false, text: 'დაკავშირება ვერ მოხერხდა.' },
+    }
+    setConnectMsg(map[p] ?? null)
+    loadChannels()
+    // Clear the query param so a refresh doesn't re-show it.
+    window.history.replaceState({}, '', '/inbox')
+    const t = setTimeout(() => setConnectMsg(null), 5000)
+    return () => clearTimeout(t)
+  }, [loadChannels])
 
   const loadThread = useCallback(async (id: string) => {
     try {
@@ -192,11 +231,61 @@ export default function Inbox() {
   const badge = activeConvo ? sourceBadge(activeConvo.source) : null
 
   return (
-    <div className="flex h-full min-h-0">
+    <div className="relative flex h-full min-h-0">
+      {connectMsg && (
+        <div
+          className={`fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded-lg px-4 py-2 text-sm text-white shadow-lg ${
+            connectMsg.ok ? 'bg-emerald-600' : 'bg-red-600'
+          }`}
+        >
+          {connectMsg.text}
+        </div>
+      )}
       {/* ---- Pane 1: conversation list ---- */}
       <div className="flex w-72 flex-none flex-col border-r border-slate-800">
-        <div className="border-b border-slate-800 px-4 py-3 text-sm font-semibold text-slate-100">
-          შემოსული
+        <div className="relative border-b border-slate-800 px-4 py-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-semibold text-slate-100">შემოსული</span>
+            <button
+              onClick={() => setShowConnect((s) => !s)}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800 px-2 py-1 text-[11px] font-medium text-slate-200 transition-colors hover:bg-slate-700"
+            >
+              <Link2 size={12} />
+              {channels.length > 0 ? `${channels.length} არხი` : 'დაკავშირება'}
+            </button>
+          </div>
+
+          {/* Connect popover */}
+          {showConnect && (
+            <div className="absolute right-4 top-full z-30 mt-1 w-60 rounded-lg border border-slate-700 bg-slate-800 p-3 shadow-xl">
+              <div className="mb-2 text-xs font-semibold text-slate-200">დაკავშირებული არხები</div>
+              {channels.length === 0 ? (
+                <div className="mb-3 text-[11px] text-slate-500">ჯერ არცერთი. დააკავშირე გვერდი ქვემოთ.</div>
+              ) : (
+                <ul className="mb-3 space-y-1">
+                  {channels.map((ch) => (
+                    <li key={ch.id} className="flex items-center gap-1.5 text-[11px] text-slate-300">
+                      {ch.platform === 'instagram' ? (
+                        <Camera size={12} className="text-pink-400" />
+                      ) : (
+                        <MessageSquare size={12} className="text-sky-400" />
+                      )}
+                      <span className="truncate">{ch.page_name || ch.platform}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <a
+                href="/api/channels/facebook/start"
+                className="flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-emerald-500"
+              >
+                <Plus size={13} /> Facebook / Instagram
+              </a>
+              <p className="mt-2 text-[10px] leading-snug text-slate-500">
+                Facebook გვერდით შედი — გვერდები და მათი Instagram ავტომატურად დაუკავშირდება.
+              </p>
+            </div>
+          )}
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
           {convos.length === 0 && (
