@@ -213,6 +213,16 @@ async function maybeAutoReply(
   if (!claimed) return 'off' // another invocation holds the lock
 
   try {
+  // Rate limit: cap AI replies per thread in a short window so a flood/bot
+  // can't hammer the model (cost + abuse). Normal chats never hit this.
+  const windowStart = new Date(Date.now() - 60_000).toISOString()
+  const { count: recentReplies } = await supabase
+    .from('ai_decisions')
+    .select('id', { count: 'exact', head: true })
+    .eq('conversation_id', convoId)
+    .gte('created_at', windowStart)
+  if ((recentReplies ?? 0) >= 10) return 'off' // flood — stop auto-replying
+
   // The MOST RECENT 20 messages, in chronological order. (Ordering ascending
   // with a limit returns the OLDEST 20 — which froze the transcript on the
   // early greetings once a thread passed 20 messages, so the AI never saw new
