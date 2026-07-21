@@ -117,6 +117,10 @@ export default function Inbox() {
   })
   const [savingAi, setSavingAi] = useState(false)
   const [savedAi, setSavedAi] = useState(false)
+  // In-modal "test the AI" panel.
+  const [testQ, setTestQ] = useState('')
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<{ reply: string; handoff: boolean } | null>(null)
   const threadRef = useRef<HTMLDivElement>(null)
 
   const activeConvo = convos.find((c) => c.id === activeId) ?? null
@@ -203,6 +207,46 @@ export default function Inbox() {
       }
     } finally {
       setSavingAi(false)
+    }
+  }
+
+  const KNOWLEDGE_TEMPLATE = `## კომპანია
+- სახელი:
+- საქმიანობა:
+- სამუშაო საათები:
+- მისამართი / არეალი:
+
+## სერვისები და ფასები
+- სერვისი 1 — რა შედის, ფასი:
+- სერვისი 2 — რა შედის, ფასი:
+
+## ვადები
+- სერვისი 1:
+- სერვისი 2:
+
+## ხშირი კითხვები
+- კითხვა? — პასუხი.
+- კითხვა? — პასუხი.
+
+## რას არ ვამბობთ
+- (დაუდასტურებელი გარანტია, არარსებული ფასდაკლება და ა.შ.)`
+
+  async function runTest() {
+    const q = testQ.trim()
+    if (!q || testing) return
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const res = await fetch('/api/inbox/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: q }),
+      })
+      const d = await res.json()
+      if (res.ok) setTestResult({ reply: d.reply, handoff: !!d.handoff })
+      else alert(d.error ?? 'ტესტი ვერ შესრულდა.')
+    } finally {
+      setTesting(false)
     }
   }
 
@@ -421,8 +465,16 @@ export default function Inbox() {
                   style={{ fontFamily: 'var(--font-geist-sans), var(--font-firago), sans-serif', letterSpacing: 'normal' }}
                 />
 
-                <div className="mb-1.5 text-xs font-medium text-slate-300">
-                  კომპანიის ინფორმაცია
+                <div className="mb-1.5 flex items-center justify-between">
+                  <span className="text-xs font-medium text-slate-300">კომპანიის ინფორმაცია</span>
+                  {!knowledge.trim() && (
+                    <button
+                      onClick={() => setKnowledge(KNOWLEDGE_TEMPLATE)}
+                      className="text-[11px] text-emerald-400 transition-colors hover:text-emerald-300"
+                    >
+                      + შაბლონის ჩასმა
+                    </button>
+                  )}
                 </div>
                 <p className="mb-2 text-[11px] leading-snug text-slate-500">
                   AI მხოლოდ ამ ტექსტიდან პასუხობს. ჩაწერე ყველაფერი, რაც კლიენტს შეიძლება ჰკითხოს.
@@ -435,6 +487,46 @@ export default function Inbox() {
                   className="w-full resize-y rounded-lg border border-slate-700 bg-slate-900 px-3 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:border-emerald-600 focus:outline-none"
                   style={{ fontFamily: 'var(--font-geist-sans), var(--font-firago), sans-serif', letterSpacing: 'normal' }}
                 />
+
+                {/* Test the AI against the current knowledge */}
+                <div className="mt-4 rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                  <div className="mb-1.5 text-xs font-medium text-slate-300">AI-ს ტესტირება</div>
+                  <p className="mb-2 text-[11px] leading-snug text-slate-500">
+                    დაწერე კითხვა კლიენტივით და ნახე როგორ უპასუხებდა (რეალური გაგზავნის გარეშე).
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      value={testQ}
+                      onChange={(e) => setTestQ(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          runTest()
+                        }
+                      }}
+                      placeholder="მაგ: რა ღირს ვებსაიტი?"
+                      className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-emerald-600 focus:outline-none"
+                      style={{ fontFamily: 'var(--font-geist-sans), var(--font-firago), sans-serif', letterSpacing: 'normal' }}
+                    />
+                    <button
+                      onClick={runTest}
+                      disabled={testing || !testQ.trim()}
+                      className="flex-none rounded-lg bg-emerald-600 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
+                    >
+                      {testing ? '...' : 'სცადე'}
+                    </button>
+                  </div>
+                  {testResult && (
+                    <div className="mt-2 rounded-lg bg-slate-800 p-2.5">
+                      {testResult.handoff && (
+                        <div className="mb-1 text-[10px] font-medium text-amber-400">
+                          ⚠️ გადაამისამართებდა ადამიანთან (ეს პასუხი knowledge-ში არ არის)
+                        </div>
+                      )}
+                      <div className="whitespace-pre-wrap text-xs text-slate-200">{testResult.reply}</div>
+                    </div>
+                  )}
+                </div>
 
                 {/* Booking */}
                 <div className="mt-4 border-t border-slate-700 pt-4">
