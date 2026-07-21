@@ -16,9 +16,10 @@ opportunities, tasks, leads). ეს პირველად.
 | 05 | `05-inbox-tone.sql` | inbox_settings.tone (ტონი/პიროვნება) | ✅ გაშვებული |
 | 06 | `06-inbox-phase1.sql` | lead scoring: conversations.lead_score/intent/interest_level/consultation_offers/opted_out | ✅ გაშვებული |
 | 07 | `07-notifications.sql` | ზარის notifications + triggers (leads/tasks) | ✅ გაშვებული |
-| 08 | `08-booking.sql` | კონსულტაციის დაჯავშნა: inbox_settings booking config + conversations booking state | ⏳ გასაშვები |
+| 08 | `08-booking.sql` | კონსულტაციის დაჯავშნა: inbox_settings booking config + conversations booking state | ✅ გაშვებული |
+| 09 | `09-ai-decisions.sql` | AI decision trace (observability): ai_decisions ცხრილი | ⏳ გასაშვები |
 
-**ახლა გასაშვები:** `08-booking.sql`
+**ახლა გასაშვები:** `09-ai-decisions.sql`
 
 ## ახალი მიგრაციის დამატება
 შემდეგი ფაილი `08-<სახელი>.sql`, ცხრილში სტრიქონი დაამატე, გაუშვი Supabase-ში.

@@ -57,7 +57,20 @@ export async function GET(
   // Opening a thread clears its unread flag.
   await supabase.from('conversations').update({ unread: false }).eq('id', id)
 
-  return NextResponse.json({ conversation: convo, messages: messages ?? [] })
+  // Latest AI decision trace (observability) for this thread.
+  const { data: lastDecision } = await supabase
+    .from('ai_decisions')
+    .select('outcome, intent, input_tokens, output_tokens, latency_ms, created_at')
+    .eq('conversation_id', id)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  return NextResponse.json({
+    conversation: convo,
+    messages: messages ?? [],
+    last_decision: lastDecision ?? null,
+  })
 }
 
 export async function POST(

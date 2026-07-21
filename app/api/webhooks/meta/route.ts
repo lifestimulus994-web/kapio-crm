@@ -143,7 +143,7 @@ async function handleMessaging(conn: Connection, ev: MessagingEvent) {
   const preview = text?.slice(0, 120) ?? null
   const who = convo.name ?? 'ვინმემ'
   if (text) {
-    const outcome = await maybeAutoReply(conn, convo.id, psid)
+    const outcome = await maybeAutoReply(conn, convo.id, psid, text)
     if (outcome === 'handoff') {
       await notifyWorkspace({
         workspaceId: conn.workspace_id,
@@ -173,7 +173,8 @@ type AutoOutcome = 'handled' | 'handoff' | 'off'
 async function maybeAutoReply(
   conn: Connection,
   convoId: string,
-  psid: string
+  psid: string,
+  triggerText: string
 ): Promise<AutoOutcome> {
   const { data: settings } = await supabase
     .from('inbox_settings')
@@ -221,6 +222,7 @@ async function maybeAutoReply(
     proposedSlots: proposedLabels,
   }
 
+  const t0 = Date.now()
   const decision = await generateDecision(
     settings.knowledge,
     settings.tone ?? '',
@@ -229,6 +231,7 @@ async function maybeAutoReply(
     convo.consultation_offers ?? 0,
     bookingCtx
   )
+  const latencyMs = Date.now() - t0
 
   // Meter the tokens this auto-reply spent against the workspace's AI usage.
   await logAiUsage({
@@ -237,6 +240,28 @@ async function maybeAutoReply(
     inputTokens: decision.usage.inputTokens,
     outputTokens: decision.usage.outputTokens,
   })
+
+  // Trace: one row per decision (why/how fast/how much) for observability.
+  const logDecision = async (outcome: string) => {
+    try {
+      await supabase.from('ai_decisions').insert({
+        workspace_id: conn.workspace_id,
+        conversation_id: convoId,
+        trigger_text: triggerText.slice(0, 300),
+        reply_preview: decision.reply.slice(0, 120),
+        intent: decision.intent,
+        interest_level: decision.interest_level,
+        outcome,
+        handoff: decision.handoff,
+        input_tokens: decision.usage.inputTokens,
+        output_tokens: decision.usage.outputTokens,
+        latency_ms: latencyMs,
+        model: 'gemini-2.5-flash',
+      })
+    } catch {
+      /* never break the reply over a trace insert */
+    }
+  }
 
   // Deterministic lead score from the signals the AI extracted (not its guess).
   const clamp = (n: number) => Math.max(-1000, Math.min(1000, n))
@@ -284,6 +309,7 @@ async function maybeAutoReply(
           needs_human: booking.needsHuman || !ok,
         })
         .eq('id', convoId)
+      await logDecision('booking')
       return ok ? booking.outcome : 'handoff'
     }
   }
@@ -295,6 +321,7 @@ async function maybeAutoReply(
       .from('conversations')
       .update({ ...baseUpdate, last_message_preview: decision.reply.slice(0, 200), needs_human: true, unread: true })
       .eq('id', convoId)
+    await logDecision('handoff')
     return 'handoff'
   }
 
@@ -304,12 +331,14 @@ async function maybeAutoReply(
       .from('conversations')
       .update({ ...baseUpdate, last_message_preview: decision.reply.slice(0, 200), needs_human: true, unread: true })
       .eq('id', convoId)
+    await logDecision('handoff')
     return 'handoff'
   }
   await supabase
     .from('conversations')
     .update({ ...baseUpdate, last_message_preview: decision.reply.slice(0, 200), unread: false, needs_human: false })
     .eq('id', convoId)
+  await logDecision('handled')
   return 'handled'
 }
 

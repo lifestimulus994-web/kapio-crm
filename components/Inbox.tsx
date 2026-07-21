@@ -90,6 +90,12 @@ export default function Inbox() {
   const [drafting, setDrafting] = useState(false)
   const [converting, setConverting] = useState(false)
   const [leadId, setLeadId] = useState<string | null>(null)
+  const [lastDecision, setLastDecision] = useState<{
+    outcome: string
+    input_tokens: number
+    output_tokens: number
+    latency_ms: number
+  } | null>(null)
   const [convoAi, setConvoAi] = useState<{
     ai_enabled: boolean
     needs_human: boolean
@@ -296,6 +302,7 @@ export default function Inbox() {
         lead_score: data.conversation?.lead_score ?? 0,
         interest_level: data.conversation?.interest_level ?? null,
       })
+      setLastDecision(data.last_decision ?? null)
     } catch {
       /* ignore */
     }
@@ -881,6 +888,35 @@ export default function Inbox() {
                 <span className="text-slate-300">{dateTimeLabel(activeConvo.last_message_at)}</span>
               </div>
             </div>
+
+            {/* AI decision trace (observability) */}
+            {lastDecision && (
+              <div className="space-y-2 border-t border-slate-800 pt-3 text-xs">
+                <div className="text-[11px] font-medium uppercase text-slate-500" style={{ letterSpacing: 'normal' }}>
+                  AI-ს ბოლო გადაწყვეტილება
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">შედეგი</span>
+                  <span className="text-slate-300">
+                    {lastDecision.outcome === 'handoff'
+                      ? 'ადამიანს გადასცა'
+                      : lastDecision.outcome === 'booking'
+                        ? 'დაჯავშნა'
+                        : 'უპასუხა'}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">სიჩქარე</span>
+                  <span className="text-slate-300">{(lastDecision.latency_ms / 1000).toFixed(1)}წმ</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">ტოკენი</span>
+                  <span className="text-slate-300">
+                    {lastDecision.input_tokens + lastDecision.output_tokens}
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
