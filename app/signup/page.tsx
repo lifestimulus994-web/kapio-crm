@@ -1,11 +1,12 @@
 'use client'
 
-import { Suspense, useState, type FormEvent } from 'react'
+import { Suspense, useCallback, useState, type FormEvent } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Image from 'next/image'
 import Link from 'next/link'
 import { Check } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import TurnstileWidget, { turnstileEnabled } from '@/components/TurnstileWidget'
 
 type PlanId = 'starter' | 'business' | 'pro'
 
@@ -49,6 +50,8 @@ function SignupForm() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [checkEmail, setCheckEmail] = useState(false)
+  const [captcha, setCaptcha] = useState<string | null>(null)
+  const onToken = useCallback((t: string | null) => setCaptcha(t), [])
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -57,6 +60,24 @@ function SignupForm() {
     if (password.length < 6) {
       setError('პაროლი მინიმუმ 6 სიმბოლო უნდა იყოს')
       return
+    }
+
+    if (turnstileEnabled()) {
+      if (!captcha) {
+        setError('დაადასტურეთ, რომ ბოტი არ ხართ')
+        return
+      }
+      const v = await fetch('/api/turnstile/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: captcha }),
+      })
+        .then((r) => r.json())
+        .catch(() => ({ ok: false }))
+      if (!v.ok) {
+        setError('ვერიფიკაცია ვერ გაიარა. სცადეთ ხელახლა.')
+        return
+      }
     }
 
     setLoading(true)
@@ -223,6 +244,8 @@ function SignupForm() {
             />
           </div>
         </div>
+
+        <TurnstileWidget onToken={onToken} />
 
         {error && <p className="text-sm text-red-400">{error}</p>}
 

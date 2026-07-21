@@ -39,7 +39,8 @@ export async function updateSession(request: NextRequest) {
   const isPublicPath =
     publicPaths.has(request.nextUrl.pathname) ||
     request.nextUrl.pathname.startsWith('/api/cron/') ||
-    request.nextUrl.pathname.startsWith('/api/webhooks/')
+    request.nextUrl.pathname.startsWith('/api/webhooks/') ||
+    request.nextUrl.pathname.startsWith('/api/turnstile/')
   const isAuthPage =
     request.nextUrl.pathname === '/login' || request.nextUrl.pathname === '/signup'
 

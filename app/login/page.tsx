@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, type FormEvent } from 'react'
+import { useCallback, useState, type FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import TurnstileWidget, { turnstileEnabled } from '@/components/TurnstileWidget'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -12,12 +13,32 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [captcha, setCaptcha] = useState<string | null>(null)
+  const onToken = useCallback((t: string | null) => setCaptcha(t), [])
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     setError(null)
-    setLoading(true)
 
+    if (turnstileEnabled()) {
+      if (!captcha) {
+        setError('დაადასტურეთ, რომ ბოტი არ ხართ')
+        return
+      }
+      const v = await fetch('/api/turnstile/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: captcha }),
+      })
+        .then((r) => r.json())
+        .catch(() => ({ ok: false }))
+      if (!v.ok) {
+        setError('ვერიფიკაცია ვერ გაიარა. სცადეთ ხელახლა.')
+        return
+      }
+    }
+
+    setLoading(true)
     const supabase = createClient()
     const { error } = await supabase.auth.signInWithPassword({ email, password })
 
@@ -66,6 +87,8 @@ export default function LoginPage() {
             />
           </div>
         </div>
+
+        <TurnstileWidget onToken={onToken} />
 
         {error && <p className="text-sm text-red-400">{error}</p>}
 
