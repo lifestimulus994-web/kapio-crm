@@ -12,6 +12,7 @@ import {
   type BookingConfig,
 } from '@/lib/booking'
 import { notifyWorkspace } from '@/lib/notify'
+import { logAiUsage } from '@/lib/ai-usage'
 
 export const dynamic = 'force-dynamic'
 // Meta expects a fast 200; heavy work (Graph fetches) is kept minimal. A tenant
@@ -228,6 +229,14 @@ async function maybeAutoReply(
     convo.consultation_offers ?? 0,
     bookingCtx
   )
+
+  // Meter the tokens this auto-reply spent against the workspace's AI usage.
+  await logAiUsage({
+    workspaceId: conn.workspace_id,
+    route: 'inbox',
+    inputTokens: decision.usage.inputTokens,
+    outputTokens: decision.usage.outputTokens,
+  })
 
   // Deterministic lead score from the signals the AI extracted (not its guess).
   const clamp = (n: number) => Math.max(-1000, Math.min(1000, n))

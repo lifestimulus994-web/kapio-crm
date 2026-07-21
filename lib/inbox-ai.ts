@@ -31,6 +31,7 @@ export type Decision = {
   offered_consultation: boolean
   opt_out: boolean
   booking: BookingExtract
+  usage: { inputTokens: number; outputTokens: number }
 }
 
 export type BookingContext = {
@@ -59,6 +60,7 @@ const FALLBACK: Decision = {
   offered_consultation: false,
   opt_out: false,
   booking: NO_BOOKING,
+  usage: { inputTokens: 0, outputTokens: 0 },
 }
 
 export async function generateDecision(
@@ -158,10 +160,14 @@ Decide and reply to the customer's LAST message. Return only the JSON object.`
         responseMimeType: 'application/json',
       },
     })
+    const usage = {
+      inputTokens: res.usageMetadata?.promptTokenCount ?? 0,
+      outputTokens: res.usageMetadata?.candidatesTokenCount ?? 0,
+    }
     const raw = (res.text ?? '').trim()
     const parsed = JSON.parse(raw) as Partial<Decision>
     const reply = (parsed.reply ?? '').trim()
-    if (!reply) return FALLBACK
+    if (!reply) return { ...FALLBACK, usage }
     const b: Partial<BookingExtract> = parsed.booking ?? {}
     return {
       reply,
@@ -182,6 +188,7 @@ Decide and reply to the customer's LAST message. Return only the JSON object.`
         confirmed: !!b.confirmed,
         cancel: !!b.cancel,
       },
+      usage,
     }
   } catch {
     return FALLBACK

@@ -3,6 +3,7 @@ import { GoogleGenAI } from '@google/genai'
 import { supabase } from '@/lib/supabase'
 import { getCurrentMember } from '@/lib/auth'
 import { sendMessage } from '@/lib/meta'
+import { logAiUsage } from '@/lib/ai-usage'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -174,6 +175,12 @@ async function draft(convo: Convo) {
     const res = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: prompt,
+    })
+    await logAiUsage({
+      workspaceId: convo.workspace_id,
+      route: 'inbox_draft',
+      inputTokens: res.usageMetadata?.promptTokenCount ?? 0,
+      outputTokens: res.usageMetadata?.candidatesTokenCount ?? 0,
     })
     const draftText = (res.text ?? '').trim()
     return NextResponse.json({ draft: draftText })
