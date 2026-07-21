@@ -72,7 +72,7 @@ export async function generateDecision(
   if (!process.env.GEMINI_API_KEY) return FALLBACK
 
   const greetingRule = alreadyGreeted
-    ? `You have ALREADY greeted and introduced yourself earlier. Do NOT greet again, do NOT re-introduce the business, do NOT repeat a previous reply — answer the latest message directly and move the conversation forward.`
+    ? `You have ALREADY greeted and introduced yourself earlier in this conversation. Do NOT greet again and do NOT re-introduce the business. Your reply must NOT begin with any greeting word (გამარჯობა / მოგესალმებით / სალამი / hello). Just answer the latest message directly and move the conversation forward.`
     : `This is your first reply: greet warmly, briefly introduce the business by name (from the information), then address the message.`
 
   const capRule =
