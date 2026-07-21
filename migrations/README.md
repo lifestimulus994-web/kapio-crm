@@ -19,9 +19,10 @@ opportunities, tasks, leads). ეს პირველად.
 | 08 | `08-booking.sql` | კონსულტაციის დაჯავშნა: inbox_settings booking config + conversations booking state | ✅ გაშვებული |
 | 09 | `09-ai-decisions.sql` | AI decision trace (observability): ai_decisions ცხრილი | ✅ გაშვებული |
 | 10 | `10-conversation-lock.sql` | per-conversation lock: conversations.lock_until | ✅ გაშვებული |
-| 11 | `11-knowledge-versions.sql` | knowledge versioning: knowledge_versions ცხრილი | ⏳ გასაშვები |
+| 11 | `11-knowledge-versions.sql` | knowledge versioning: knowledge_versions ცხრილი | ✅ გაშვებული |
+| 12 | `12-whatsapp-platform.sql` | WhatsApp არხის დაშვება: channel_connections platform check | ⏳ გასაშვები |
 
-**ახლა გასაშვები:** `11-knowledge-versions.sql`
+**ახლა გასაშვები:** `11-knowledge-versions.sql`, `12-whatsapp-platform.sql`
 
 ## ახალი მიგრაციის დამატება
 შემდეგი ფაილი `08-<სახელი>.sql`, ცხრილში სტრიქონი დაამატე, გაუშვი Supabase-ში.

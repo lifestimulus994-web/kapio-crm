@@ -46,6 +46,7 @@ const POLL_MS = 5000
 function sourceBadge(source: string | null) {
   if (source === 'fb_ad') return { label: 'რეკლამიდან', Icon: Megaphone, cls: 'text-amber-400' }
   if (source === 'ig') return { label: 'Instagram', Icon: Camera, cls: 'text-pink-400' }
+  if (source === 'whatsapp') return { label: 'WhatsApp', Icon: MessageSquare, cls: 'text-green-400' }
   return { label: 'Messenger', Icon: MessageSquare, cls: 'text-sky-400' }
 }
 

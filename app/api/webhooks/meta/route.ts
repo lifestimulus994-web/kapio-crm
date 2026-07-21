@@ -1,6 +1,12 @@
 import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
-import { verifySignature, fetchLeadFields, fetchUserName, sendMessage } from '@/lib/meta'
+import {
+  verifySignature,
+  fetchLeadFields,
+  fetchUserName,
+  sendMessage,
+  sendWhatsAppMessage,
+} from '@/lib/meta'
 import { generateDecision, type BookingContext } from '@/lib/inbox-ai'
 import { scoreDelta } from '@/lib/lead-score'
 import { selectKnowledge } from '@/lib/retrieve'
@@ -64,6 +70,17 @@ export async function POST(req: Request) {
   // event can't make Meta retry the whole batch forever.
   for (const entry of body.entry ?? []) {
     try {
+      // WhatsApp Cloud API: messages arrive as changes with messaging_product
+      // 'whatsapp', routed by the business phone_number_id (not entry.id).
+      const waChanges = (entry.changes ?? []).filter(
+        (ch) => ch.field === 'messages' && ch.value?.messaging_product === 'whatsapp'
+      )
+      if (waChanges.length) {
+        for (const ch of waChanges) await handleWhatsApp(ch.value)
+        continue
+      }
+
+      // Facebook / Instagram Page events, routed by the Page id.
       const conn = await connectionForPage(entry.id)
       if (!conn) continue // Page not connected to any workspace — ignore.
 
@@ -171,6 +188,63 @@ async function handleMessaging(conn: Connection, ev: MessagingEvent) {
 }
 
 type AutoOutcome = 'handled' | 'handoff' | 'off'
+
+// --- WhatsApp ---------------------------------------------------------------
+// WhatsApp Cloud API delivers messages under a change payload keyed by the
+// business phone_number_id. Same conversation + auto-reply pipeline as
+// Messenger; only the parse and the send transport differ.
+async function handleWhatsApp(value: WhatsAppValue) {
+  const phoneNumberId = value.metadata?.phone_number_id
+  if (!phoneNumberId) return
+  const conn = await connectionForPage(phoneNumberId)
+  if (!conn) return
+
+  const contactName = value.contacts?.[0]?.profile?.name ?? null
+  for (const m of value.messages ?? []) {
+    if (m.type !== 'text' || !m.text?.body) continue // text only for now
+    const from = m.from
+    const mid = m.id ?? null
+    const text = m.text.body
+
+    const convo = await upsertConversation(conn, from, {
+      source: 'whatsapp',
+      adId: null,
+      ref: null,
+      preview: text,
+      knownName: contactName,
+    })
+
+    const { error } = await supabase.from('messages').insert({
+      conversation_id: convo.id,
+      workspace_id: conn.workspace_id,
+      direction: 'in',
+      body: text,
+      external_id: mid,
+    })
+    if (error?.code === '23505') continue // duplicate delivery
+
+    const preview = text.slice(0, 120)
+    const who = convo.name ?? contactName ?? 'ვინმემ'
+    const outcome = await maybeAutoReply(conn, convo.id, from, text)
+    if (outcome === 'handoff') {
+      await notifyWorkspace({
+        workspaceId: conn.workspace_id,
+        type: 'handoff',
+        title: 'AI-მ გადმოამისამართა',
+        body: `${who}: ${preview}`,
+        link: '/inbox',
+      })
+    } else if (outcome === 'off') {
+      await notifyWorkspace({
+        workspaceId: conn.workspace_id,
+        type: 'message',
+        title: 'ახალი მესიჯი (WhatsApp)',
+        body: `${who}: ${preview}`,
+        link: '/inbox',
+      })
+    }
+  }
+}
 
 // --- AI auto-reply ---------------------------------------------------------
 // Answers an inbound message on the business's behalf when enabled. Sends only
@@ -314,7 +388,11 @@ async function maybeAutoReply(
 
   const send = async (text: string): Promise<boolean> => {
     try {
-      await sendMessage(psid, text, conn.access_token)
+      if (conn.platform === 'whatsapp') {
+        await sendWhatsAppMessage(conn.page_id, psid, text, conn.access_token)
+      } else {
+        await sendMessage(psid, text, conn.access_token)
+      }
       await supabase.from('messages').insert({
         conversation_id: convoId,
         workspace_id: conn.workspace_id,
@@ -538,7 +616,8 @@ async function runBooking(
 }
 
 // --- Lead Ads --------------------------------------------------------------
-async function handleLeadgen(conn: Connection, value: LeadgenValue) {
+async function handleLeadgen(conn: Connection, value: ChangeValue) {
+  if (!value.leadgen_id) return
   const fields = await fetchLeadFields(value.leadgen_id, conn.access_token)
   const name =
     fields.full_name || fields.name ||
@@ -562,7 +641,13 @@ async function handleLeadgen(conn: Connection, value: LeadgenValue) {
 async function upsertConversation(
   conn: Connection,
   externalId: string,
-  opts: { source: string; adId: string | null; ref: string | null; preview: string | null }
+  opts: {
+    source: string
+    adId: string | null
+    ref: string | null
+    preview: string | null
+    knownName?: string | null
+  }
 ) {
   const { data: existing } = await supabase
     .from('conversations')
@@ -585,7 +670,11 @@ async function upsertConversation(
     return existing as { id: string; name: string | null }
   }
 
-  const name = await fetchUserName(externalId, conn.access_token)
+  // WhatsApp gives the display name in the payload; Messenger needs a Graph
+  // lookup by PSID.
+  const name =
+    opts.knownName ??
+    (conn.platform === 'whatsapp' ? null : await fetchUserName(externalId, conn.access_token))
   const { data: created } = await supabase
     .from('conversations')
     .insert({
@@ -611,7 +700,7 @@ type MetaWebhookBody = { object?: string; entry?: MetaEntry[] }
 type MetaEntry = {
   id: string
   messaging?: MessagingEvent[]
-  changes?: { field: string; value: LeadgenValue }[]
+  changes?: { field: string; value: ChangeValue }[]
 }
 type Referral = { ref?: string; ad_id?: string; source?: string; type?: string }
 type MessagingEvent = {
@@ -621,4 +710,16 @@ type MessagingEvent = {
   postback?: { referral?: Referral }
   referral?: Referral
 }
-type LeadgenValue = { leadgen_id: string; page_id?: string; form_id?: string; ad_id?: string }
+// entry.changes[].value is either a Lead Ads submission or a WhatsApp payload.
+type ChangeValue = {
+  leadgen_id?: string
+  page_id?: string
+  form_id?: string
+  ad_id?: string
+} & Partial<WhatsAppValue>
+type WhatsAppValue = {
+  messaging_product?: string
+  metadata?: { phone_number_id?: string; display_phone_number?: string }
+  contacts?: { profile?: { name?: string }; wa_id?: string }[]
+  messages?: { from: string; id?: string; type?: string; text?: { body?: string } }[]
+}

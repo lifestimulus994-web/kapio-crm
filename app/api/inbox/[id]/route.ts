@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { GoogleGenAI } from '@google/genai'
 import { supabase } from '@/lib/supabase'
 import { getCurrentMember } from '@/lib/auth'
-import { sendMessage } from '@/lib/meta'
+import { sendMessage, sendWhatsAppMessage } from '@/lib/meta'
 import { logAiUsage } from '@/lib/ai-usage'
 
 export const dynamic = 'force-dynamic'
@@ -124,14 +124,18 @@ async function reply(convo: Convo, text: string) {
 
   const { data: conn } = await supabase
     .from('channel_connections')
-    .select('access_token')
+    .select('access_token, platform, page_id')
     .eq('id', convo.connection_id)
     .maybeSingle()
   if (!conn?.access_token)
     return NextResponse.json({ error: 'Page token ვერ მოიძებნა.' }, { status: 400 })
 
   try {
-    await sendMessage(convo.external_id, clean, conn.access_token)
+    if (conn.platform === 'whatsapp') {
+      await sendWhatsAppMessage(conn.page_id, convo.external_id, clean, conn.access_token)
+    } else {
+      await sendMessage(convo.external_id, clean, conn.access_token)
+    }
   } catch (e) {
     return NextResponse.json(
       { error: `ვერ გაიგზავნა: ${e instanceof Error ? e.message : 'უცნობი'}` },

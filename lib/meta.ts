@@ -159,3 +159,29 @@ export async function sendMessage(
   })
   if (!res.ok) throw new Error(`send failed: ${res.status} ${await res.text()}`)
 }
+
+// Send a text reply on WhatsApp Cloud API. `phoneNumberId` is the business
+// number's id (our connection.page_id for platform 'whatsapp'); `to` is the
+// customer's WhatsApp number.
+export async function sendWhatsAppMessage(
+  phoneNumberId: string,
+  to: string,
+  text: string,
+  token: string
+): Promise<void> {
+  const url = `${GRAPH}/${phoneNumberId}/messages`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to,
+      type: 'text',
+      text: { body: text },
+    }),
+  })
+  if (!res.ok) throw new Error(`whatsapp send failed: ${res.status} ${await res.text()}`)
+}
