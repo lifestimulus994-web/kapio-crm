@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Send, Mic, Loader2, Sparkles } from 'lucide-react'
+import { createClient } from '@/lib/supabase/client'
 
 type PendingConfirmation = {
   name: string
@@ -27,20 +28,36 @@ type ChatResult =
   | { ok: true; data: { reply?: string; pendingConfirmation?: PendingConfirmation; actions?: unknown[] } }
   | { ok: false; text: string; sessionExpired?: boolean }
 
-// One place to call /api/chat and turn every failure into a clean, human
-// message — never a raw "network error". Handles an expired session (the
-// request gets redirected to /login) and non-JSON / server errors.
-async function callChat(payload: Record<string, unknown>): Promise<ChatResult> {
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+// One place to call /api/chat. Before ever surfacing an error we try hard to
+// recover silently: on an expired session we refresh it and retry; on a
+// transient hiccup we retry once. Only if that also fails do we show a clean,
+// human message — never a raw "network error".
+async function callChat(payload: Record<string, unknown>, attempt = 0): Promise<ChatResult> {
+  const retry = (): Promise<ChatResult> => callChat(payload, attempt + 1)
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     })
-    // Session expired → middleware redirected us to the login page.
-    if (res.redirected && res.url.includes('/login')) {
+
+    // Session expired → middleware redirected to /login (or 401). Refresh the
+    // session once and retry so the user just gets their answer.
+    const expired = (res.redirected && res.url.includes('/login')) || res.status === 401
+    if (expired) {
+      if (attempt === 0) {
+        try {
+          await createClient().auth.refreshSession()
+        } catch {
+          /* fall through to retry anyway */
+        }
+        return retry()
+      }
       return { ok: false, text: 'სესია ამოიწურა. გვერდი განაახლეთ და თავიდან შედით.', sessionExpired: true }
     }
+
     let data: { reply?: string; error?: string; pendingConfirmation?: PendingConfirmation; actions?: unknown[] } | null =
       null
     try {
@@ -48,14 +65,20 @@ async function callChat(payload: Record<string, unknown>): Promise<ChatResult> {
     } catch {
       data = null
     }
-    if (res.status === 401 || (data == null && !res.ok)) {
-      return { ok: false, text: 'სესია ამოიწურა. გვერდი განაახლეთ და თავიდან შედით.', sessionExpired: true }
-    }
+
     if (!res.ok || !data) {
+      if (attempt === 0) {
+        await sleep(700)
+        return retry()
+      }
       return { ok: false, text: data?.error ?? 'ბოდიში, დროებით ვერ დავამუშავე. სცადეთ ხელახლა.' }
     }
     return { ok: true, data }
   } catch {
+    if (attempt === 0) {
+      await sleep(700)
+      return retry()
+    }
     return { ok: false, text: 'ინტერნეტთან კავშირი შეწყდა. შეამოწმეთ კავშირი და სცადეთ ხელახლა.' }
   }
 }
