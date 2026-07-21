@@ -23,6 +23,43 @@ const suggestions = [
   'მომიძებნე 10 პოტენციური კლიენტი ჩემი სფეროდან თბილისში',
 ]
 
+type ChatResult =
+  | { ok: true; data: { reply?: string; pendingConfirmation?: PendingConfirmation; actions?: unknown[] } }
+  | { ok: false; text: string; sessionExpired?: boolean }
+
+// One place to call /api/chat and turn every failure into a clean, human
+// message — never a raw "network error". Handles an expired session (the
+// request gets redirected to /login) and non-JSON / server errors.
+async function callChat(payload: Record<string, unknown>): Promise<ChatResult> {
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    // Session expired → middleware redirected us to the login page.
+    if (res.redirected && res.url.includes('/login')) {
+      return { ok: false, text: 'სესია ამოიწურა. გვერდი განაახლეთ და თავიდან შედით.', sessionExpired: true }
+    }
+    let data: { reply?: string; error?: string; pendingConfirmation?: PendingConfirmation; actions?: unknown[] } | null =
+      null
+    try {
+      data = await res.json()
+    } catch {
+      data = null
+    }
+    if (res.status === 401 || (data == null && !res.ok)) {
+      return { ok: false, text: 'სესია ამოიწურა. გვერდი განაახლეთ და თავიდან შედით.', sessionExpired: true }
+    }
+    if (!res.ok || !data) {
+      return { ok: false, text: data?.error ?? 'ბოდიში, დროებით ვერ დავამუშავე. სცადეთ ხელახლა.' }
+    }
+    return { ok: true, data }
+  } catch {
+    return { ok: false, text: 'ინტერნეტთან კავშირი შეწყდა. შეამოწმეთ კავშირი და სცადეთ ხელახლა.' }
+  }
+}
+
 // Shared chat core used by BOTH the floating corner widget (AIAssistant) and
 // the full-screen /ai page. It fills whatever container it is rendered into;
 // the 'page' variant just gets roomier type and layout.
@@ -123,32 +160,17 @@ export default function AIChat({ variant }: { variant: 'widget' | 'page' }) {
     setInput('')
     setLoading(true)
     try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: question, history }),
-      })
-      const data = await res.json()
-      const reply = res.ok
-        ? data.reply
-        : `⚠️ ${data.error ?? 'რაღაც შეცდომა მოხდა.'}`
+      const r = await callChat({ message: question, history })
+      if (!r.ok) {
+        setMessages((m) => [...m, { role: 'model', text: r.text }])
+        return
+      }
       setMessages((m) => [
         ...m,
-        {
-          role: 'model',
-          text: reply,
-          confirmation: res.ok ? data.pendingConfirmation : undefined,
-        },
+        { role: 'model', text: r.data.reply ?? '', confirmation: r.data.pendingConfirmation },
       ])
       // If the AI created/changed records, refresh the current page's data.
-      if (res.ok && Array.isArray(data.actions) && data.actions.length > 0) {
-        router.refresh()
-      }
-    } catch {
-      setMessages((m) => [
-        ...m,
-        { role: 'model', text: '⚠️ ქსელის შეცდომა. სერვერი მუშაობს?' },
-      ])
+      if (Array.isArray(r.data.actions) && r.data.actions.length > 0) router.refresh()
     } finally {
       setLoading(false)
     }
@@ -169,27 +191,18 @@ export default function AIChat({ variant }: { variant: 'widget' | 'page' }) {
 
     setLoading(true)
     try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          confirm: { name: msg.confirmation.name, args: msg.confirmation.args },
-        }),
+      const r = await callChat({
+        confirm: { name: msg.confirmation.name, args: msg.confirmation.args },
       })
-      const data = await res.json()
+      if (!r.ok) {
+        setMessages((m) => [...m, { role: 'model', text: r.text }])
+        return
+      }
       setMessages((m) => [
         ...m.map((x, i) => (i === index ? { ...x, resolved: 'confirmed' as const } : x)),
-        {
-          role: 'model',
-          text: res.ok ? data.reply : `⚠️ ${data.error ?? 'რაღაც შეცდომა მოხდა.'}`,
-        },
+        { role: 'model', text: r.data.reply ?? '' },
       ])
-      if (res.ok) router.refresh()
-    } catch {
-      setMessages((m) => [
-        ...m,
-        { role: 'model', text: '⚠️ ქსელის შეცდომა. სერვერი მუშაობს?' },
-      ])
+      router.refresh()
     } finally {
       setLoading(false)
     }
