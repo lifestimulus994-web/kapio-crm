@@ -127,14 +127,19 @@ async function handleMessaging(conn: Connection, ev: MessagingEvent) {
     preview: text,
   })
 
+  // Dedup: Meta can re-deliver the same message. external_id (mid) is unique,
+  // so a duplicate insert fails with 23505 — treat that as "already handled"
+  // and do NOT reply again.
+  let duplicate = false
   if (mid || text) {
-    await supabase.from('messages').insert({
+    const { error } = await supabase.from('messages').insert({
       conversation_id: convo.id,
       workspace_id: conn.workspace_id,
       direction: 'in',
       body: text,
       external_id: mid,
     })
+    if (error?.code === '23505') duplicate = true
   }
 
   // Auto-reply (if enabled), then notify the team once — as "needs a human"
@@ -142,7 +147,7 @@ async function handleMessaging(conn: Connection, ev: MessagingEvent) {
   // answered it fully, there's nothing for a human to do, so stay quiet.
   const preview = text?.slice(0, 120) ?? null
   const who = convo.name ?? 'ვინმემ'
-  if (text) {
+  if (text && !duplicate) {
     const outcome = await maybeAutoReply(conn, convo.id, psid, text)
     if (outcome === 'handoff') {
       await notifyWorkspace({
@@ -194,6 +199,20 @@ async function maybeAutoReply(
     .maybeSingle()
   if (!convo?.ai_enabled) return 'off' // a human has taken this thread over
 
+  // Per-conversation lock: an atomic conditional claim so two overlapping
+  // deliveries can't both generate a reply. Released in the finally below.
+  const nowIso = new Date().toISOString()
+  const lockIso = new Date(Date.now() + 45000).toISOString()
+  const { data: claimed } = await supabase
+    .from('conversations')
+    .update({ lock_until: lockIso })
+    .eq('id', convoId)
+    .or(`lock_until.is.null,lock_until.lt.${nowIso}`)
+    .select('id')
+    .maybeSingle()
+  if (!claimed) return 'off' // another invocation holds the lock
+
+  try {
   // The MOST RECENT 20 messages, in chronological order. (Ordering ascending
   // with a limit returns the OLDEST 20 — which froze the transcript on the
   // early greetings once a thread passed 20 messages, so the AI never saw new
@@ -340,6 +359,10 @@ async function maybeAutoReply(
     .eq('id', convoId)
   await logDecision('handled')
   return 'handled'
+  } finally {
+    // Release the per-conversation lock (also expires on its own after 45s).
+    await supabase.from('conversations').update({ lock_until: null }).eq('id', convoId)
+  }
 }
 
 // --- Booking state machine --------------------------------------------------
