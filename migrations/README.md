@@ -18,9 +18,10 @@ opportunities, tasks, leads). ეს პირველად.
 | 07 | `07-notifications.sql` | ზარის notifications + triggers (leads/tasks) | ✅ გაშვებული |
 | 08 | `08-booking.sql` | კონსულტაციის დაჯავშნა: inbox_settings booking config + conversations booking state | ✅ გაშვებული |
 | 09 | `09-ai-decisions.sql` | AI decision trace (observability): ai_decisions ცხრილი | ✅ გაშვებული |
-| 10 | `10-conversation-lock.sql` | per-conversation lock: conversations.lock_until | ⏳ გასაშვები |
+| 10 | `10-conversation-lock.sql` | per-conversation lock: conversations.lock_until | ✅ გაშვებული |
+| 11 | `11-knowledge-versions.sql` | knowledge versioning: knowledge_versions ცხრილი | ⏳ გასაშვები |
 
-**ახლა გასაშვები:** `10-conversation-lock.sql`
+**ახლა გასაშვები:** `11-knowledge-versions.sql`
 
 ## ახალი მიგრაციის დამატება
 შემდეგი ფაილი `08-<სახელი>.sql`, ცხრილში სტრიქონი დაამატე, გაუშვი Supabase-ში.

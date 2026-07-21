@@ -127,6 +127,11 @@ export default function Inbox() {
   const [testQ, setTestQ] = useState('')
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ reply: string; handoff: boolean } | null>(null)
+  // Knowledge version history.
+  const [showVersions, setShowVersions] = useState(false)
+  const [versions, setVersions] = useState<
+    { id: string; knowledge: string; tone: string; created_at: string }[]
+  >([])
   const threadRef = useRef<HTMLDivElement>(null)
 
   const activeConvo = convos.find((c) => c.id === activeId) ?? null
@@ -236,6 +241,25 @@ export default function Inbox() {
 
 ## რას არ ვამბობთ
 - (დაუდასტურებელი გარანტია, არარსებული ფასდაკლება და ა.შ.)`
+
+  async function openVersions() {
+    setShowVersions((v) => !v)
+    if (!showVersions) {
+      try {
+        const res = await fetch('/api/inbox/knowledge-versions', { cache: 'no-store' })
+        const d = await res.json()
+        setVersions(d.versions ?? [])
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  function restoreVersion(v: { knowledge: string; tone: string }) {
+    setKnowledge(v.knowledge)
+    setTone(v.tone)
+    setShowVersions(false)
+  }
 
   async function runTest() {
     const q = testQ.trim()
@@ -438,13 +462,52 @@ export default function Inbox() {
                   <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-100">
                     <Bot size={16} className="text-emerald-400" /> ავტომატური პასუხი
                   </h2>
-                  <button
-                    onClick={() => setShowAi(false)}
-                    className="rounded-lg p-1 text-slate-400 hover:bg-slate-700 hover:text-slate-200"
-                  >
-                    <X size={18} />
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={openVersions}
+                      className="rounded-lg px-2 py-1 text-[11px] text-slate-400 transition-colors hover:bg-slate-700 hover:text-slate-200"
+                    >
+                      ისტორია
+                    </button>
+                    <button
+                      onClick={() => setShowAi(false)}
+                      className="rounded-lg p-1 text-slate-400 hover:bg-slate-700 hover:text-slate-200"
+                    >
+                      <X size={18} />
+                    </button>
+                  </div>
                 </div>
+
+                {showVersions && (
+                  <div className="mb-4 rounded-lg border border-slate-700 bg-slate-900 p-3">
+                    <div className="mb-2 text-xs font-medium text-slate-300">წინა ვერსიები</div>
+                    {versions.length === 0 ? (
+                      <div className="text-[11px] text-slate-500">ჯერ არაფერი. ცვლილების შენახვისას აქ ჩნდeba.</div>
+                    ) : (
+                      <ul className="space-y-1">
+                        {versions.map((v) => (
+                          <li key={v.id} className="flex items-center justify-between gap-2">
+                            <span className="min-w-0 flex-1 truncate text-[11px] text-slate-400">
+                              {new Date(v.created_at).toLocaleString('ka-GE', {
+                                day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+                              })}{' '}
+                              — {(v.knowledge || '').slice(0, 40)}…
+                            </span>
+                            <button
+                              onClick={() => restoreVersion(v)}
+                              className="flex-none rounded border border-slate-600 px-2 py-0.5 text-[10px] text-emerald-400 transition-colors hover:bg-slate-700"
+                            >
+                              აღდგენა
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <p className="mt-2 text-[10px] text-slate-500">
+                      „აღდგენა" ველებში ჩასვამს ძველ ტექსტს — შემდეგ „შენახვა" დააჭირე.
+                    </p>
+                  </div>
+                )}
 
                 <label className="mb-4 flex cursor-pointer items-center justify-between rounded-lg border border-slate-700 bg-slate-900 px-3 py-2.5">
                   <span className="text-sm text-slate-200">AI ავტომატურად პასუხობს</span>

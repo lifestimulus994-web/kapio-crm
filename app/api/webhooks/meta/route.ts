@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase'
 import { verifySignature, fetchLeadFields, fetchUserName, sendMessage } from '@/lib/meta'
 import { generateDecision, type BookingContext } from '@/lib/inbox-ai'
 import { scoreDelta } from '@/lib/lead-score'
+import { selectKnowledge } from '@/lib/retrieve'
 import {
   getAvailableSlots,
   isSlotFree,
@@ -251,9 +252,13 @@ async function maybeAutoReply(
     proposedSlots: proposedLabels,
   }
 
+  // RAG-lite: for a large structured knowledge base, send only the sections
+  // relevant to this message; otherwise the whole thing.
+  const knowledgeForCall = selectKnowledge(settings.knowledge ?? '', triggerText)
+
   const t0 = Date.now()
   const decision = await generateDecision(
-    settings.knowledge,
+    knowledgeForCall,
     settings.tone ?? '',
     transcript,
     alreadyGreeted,

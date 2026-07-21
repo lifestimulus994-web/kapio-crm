@@ -54,11 +54,30 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'არასწორი მოთხოვნა.' }, { status: 400 })
   }
 
+  const newKnowledge = typeof body.knowledge === 'string' ? body.knowledge : ''
+  const newTone = typeof body.tone === 'string' ? body.tone : ''
+
+  // Snapshot the PREVIOUS knowledge/tone into history before overwriting, so a
+  // bad edit can be rolled back. Only when something actually changed.
+  const { data: prev } = await supabase
+    .from('inbox_settings')
+    .select('knowledge, tone')
+    .eq('workspace_id', me.workspace_id)
+    .maybeSingle()
+  if (prev && (prev.knowledge !== newKnowledge || prev.tone !== newTone) && (prev.knowledge || prev.tone)) {
+    await supabase.from('knowledge_versions').insert({
+      workspace_id: me.workspace_id,
+      knowledge: prev.knowledge ?? '',
+      tone: prev.tone ?? '',
+      saved_by: me.id,
+    })
+  }
+
   const row: Record<string, unknown> = {
     workspace_id: me.workspace_id,
     ai_enabled: !!body.ai_enabled,
-    knowledge: typeof body.knowledge === 'string' ? body.knowledge : '',
-    tone: typeof body.tone === 'string' ? body.tone : '',
+    knowledge: newKnowledge,
+    tone: newTone,
     updated_at: new Date().toISOString(),
   }
   // Booking config (only overwrite when provided, so a plain AI save doesn't reset it).
