@@ -19,7 +19,7 @@ import {
   type BookingConfig,
 } from '@/lib/booking'
 import { notifyWorkspace } from '@/lib/notify'
-import { logAiUsage } from '@/lib/ai-usage'
+import { logAiUsage, checkAiBudget } from '@/lib/ai-usage'
 
 export const dynamic = 'force-dynamic'
 // Meta expects a fast 200; heavy work (Graph fetches) is kept minimal. A tenant
@@ -297,6 +297,43 @@ async function maybeAutoReply(
     .eq('conversation_id', convoId)
     .gte('created_at', windowStart)
   if ((recentReplies ?? 0) >= 10) return 'off' // flood — stop auto-replying
+
+  // Budget guard: if the workspace is over its monthly AI limit, don't spend
+  // more — send a neutral holding message and hand the thread to a human.
+  const { data: wsRow } = await supabase
+    .from('workspaces')
+    .select('plan')
+    .eq('id', conn.workspace_id)
+    .maybeSingle()
+  const budget = await checkAiBudget(conn.workspace_id, wsRow?.plan ?? 'starter')
+  if (!budget.allowed) {
+    const hold = 'მადლობა შეტყობინებისთვის! კოლეგა მალე დაგიკავშირდებათ 🙏'
+    try {
+      if (conn.platform === 'whatsapp') {
+        await sendWhatsAppMessage(conn.page_id, psid, hold, conn.access_token)
+      } else {
+        await sendMessage(psid, hold, conn.access_token)
+      }
+      await supabase.from('messages').insert({
+        conversation_id: convoId,
+        workspace_id: conn.workspace_id,
+        direction: 'out',
+        body: hold,
+      })
+    } catch (e) {
+      console.error('[budget] holding send failed', e)
+    }
+    await supabase
+      .from('conversations')
+      .update({
+        needs_human: true,
+        unread: true,
+        last_message_at: new Date().toISOString(),
+        last_message_preview: hold.slice(0, 200),
+      })
+      .eq('id', convoId)
+    return 'handoff'
+  }
 
   // The MOST RECENT 20 messages, in chronological order. (Ordering ascending
   // with a limit returns the OLDEST 20 — which froze the transcript on the
