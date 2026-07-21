@@ -263,6 +263,24 @@ export default function Inbox() {
     setShowVersions(false)
   }
 
+  const [structuring, setStructuring] = useState(false)
+  async function structureKnowledge() {
+    if (!knowledge.trim() || structuring) return
+    setStructuring(true)
+    try {
+      const res = await fetch('/api/inbox/structure-knowledge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: knowledge }),
+      })
+      const d = await res.json()
+      if (res.ok && d.structured) setKnowledge(d.structured)
+      else alert(d.error ?? 'ვერ დალაგდა.')
+    } finally {
+      setStructuring(false)
+    }
+  }
+
   async function runTest() {
     const q = testQ.trim()
     if (!q || testing) return
@@ -539,12 +557,21 @@ export default function Inbox() {
 
                 <div className="mb-1.5 flex items-center justify-between">
                   <span className="text-xs font-medium text-slate-300">კომპანიის ინფორმაცია</span>
-                  {!knowledge.trim() && (
+                  {!knowledge.trim() ? (
                     <button
                       onClick={() => setKnowledge(KNOWLEDGE_TEMPLATE)}
                       className="text-[11px] text-emerald-400 transition-colors hover:text-emerald-300"
                     >
                       + შაბლონის ჩასმა
+                    </button>
+                  ) : (
+                    <button
+                      onClick={structureKnowledge}
+                      disabled={structuring}
+                      className="flex items-center gap-1 text-[11px] text-emerald-400 transition-colors hover:text-emerald-300 disabled:opacity-50"
+                    >
+                      {structuring ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
+                      AI-თი დალაგება
                     </button>
                   )}
                 </div>
