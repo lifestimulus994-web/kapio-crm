@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
 import { usePathname } from 'next/navigation'
-import { KanbanSquare, Building2, Users, ListTodo, UserCog, Target, Sparkles, Workflow, MessageSquare, Menu, X } from 'lucide-react'
+import { KanbanSquare, Building2, Users, ListTodo, UserCog, Target, Sparkles, Workflow, MessageSquare, BarChart3, Menu, X } from 'lucide-react'
 import VoiceImport from '@/components/VoiceImport'
 import LogoutButton from '@/components/LogoutButton'
 
@@ -22,6 +22,7 @@ const groups: NavGroup[] = [
       { href: '/inbox', label: 'შემოსული', Icon: MessageSquare },
       { href: '/leads', label: 'ლიდები', Icon: Target },
       { href: '/dashboard', label: 'შესაძლებლობები', Icon: KanbanSquare },
+      { href: '/analytics', label: 'ანალიტიკა', Icon: BarChart3 },
     ],
   },
   {
