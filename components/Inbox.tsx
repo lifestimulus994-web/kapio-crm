@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import WhatsAppConnect from '@/components/WhatsAppConnect'
 import {
   Send,
   Sparkles,
@@ -727,6 +728,7 @@ export default function Inbox() {
               <p className="mt-2 text-[10px] leading-snug text-slate-500">
                 Facebook გვერდით შედი — გვერდები და მათი Instagram ავტომატურად დაუკავშირდება.
               </p>
+              <WhatsAppConnect onDone={loadChannels} />
             </div>
           )}
         </div>

@@ -98,6 +98,61 @@ export async function subscribePageToApp(pageId: string, pageToken: string): Pro
   if (!r.ok) throw new Error(`subscribe failed: ${r.status} ${await r.text()}`)
 }
 
+// --- WhatsApp Embedded Signup ----------------------------------------------
+
+// Exchange the Embedded Signup `code` for a long-lived business system-user
+// access token (no redirect_uri for the ES flow).
+export async function exchangeWhatsAppCode(code: string): Promise<string> {
+  const u = `${GRAPH}/oauth/access_token?client_id=${appId()}&client_secret=${appSecret()}&code=${encodeURIComponent(code)}`
+  const r = await fetch(u)
+  if (!r.ok) throw new Error(`wa code exchange failed: ${r.status} ${await r.text()}`)
+  return ((await r.json()) as { access_token: string }).access_token
+}
+
+// Subscribe a WhatsApp Business Account (WABA) to this app's webhook.
+export async function subscribeWabaToApp(wabaId: string, token: string): Promise<void> {
+  const r = await fetch(`${GRAPH}/${wabaId}/subscribed_apps`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!r.ok) throw new Error(`waba subscribe failed: ${r.status} ${await r.text()}`)
+}
+
+// The business number's display name/number, for showing in the UI.
+export async function fetchWhatsAppNumber(
+  phoneNumberId: string,
+  token: string
+): Promise<string | null> {
+  try {
+    const r = await fetch(
+      `${GRAPH}/${phoneNumberId}?fields=display_phone_number,verified_name`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    )
+    if (!r.ok) return null
+    const j = (await r.json()) as { display_phone_number?: string; verified_name?: string }
+    return j.verified_name || j.display_phone_number || null
+  } catch {
+    return null
+  }
+}
+
+// Register the phone number on the Cloud API (idempotent-ish; ignore "already
+// registered"). A 6-digit PIN is set if two-step verification is required.
+export async function registerWhatsAppNumber(
+  phoneNumberId: string,
+  token: string
+): Promise<void> {
+  try {
+    await fetch(`${GRAPH}/${phoneNumberId}/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ messaging_product: 'whatsapp', pin: '000000' }),
+    })
+  } catch {
+    // Non-fatal: the number may already be registered.
+  }
+}
+
 // Verify the X-Hub-Signature-256 header Meta attaches to every webhook POST.
 // Guards the endpoint: only requests signed with OUR app secret are trusted.
 // Compared in constant time against the raw (pre-parse) request body.
