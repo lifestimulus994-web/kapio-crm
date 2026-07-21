@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { GoogleGenAI } from '@google/genai'
 import { getCurrentMember } from '@/lib/auth'
-import { logAiUsage } from '@/lib/ai-usage'
+import { logAiUsage, tooManyRecent } from '@/lib/ai-usage'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -22,6 +22,9 @@ export async function POST(req: Request) {
   }
   const text = (body.text ?? '').trim()
   if (!text) return NextResponse.json({ error: 'ცარიელი ტექსტი.' }, { status: 400 })
+
+  if (await tooManyRecent(me.workspace_id, 'inbox_structure', 10))
+    return NextResponse.json({ error: 'ცოტა ხანში სცადეთ.' }, { status: 429 })
 
   const prompt = `შენ ხარ ასისტენტი, რომელიც ბიზნესის ინფორმაციას ალაგებ სუფთა, სტრუქტურირებულ სახით ჩატბოტისთვის.
 

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import { getCurrentMember } from '@/lib/auth'
 import { generateDecision } from '@/lib/inbox-ai'
-import { logAiUsage } from '@/lib/ai-usage'
+import { logAiUsage, tooManyRecent } from '@/lib/ai-usage'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -22,6 +22,9 @@ export async function POST(req: Request) {
   }
   const question = (body.question ?? '').trim()
   if (!question) return NextResponse.json({ error: 'დაწერე კითხვა.' }, { status: 400 })
+
+  if (await tooManyRecent(me.workspace_id, 'inbox_test', 20))
+    return NextResponse.json({ error: 'ცოტა ხანში სცადეთ.' }, { status: 429 })
 
   const { data: settings } = await supabase
     .from('inbox_settings')

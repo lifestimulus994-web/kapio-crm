@@ -10,7 +10,7 @@ import {
 } from '@/lib/crm-ai'
 import { parseGeorgianSchedule } from '@/lib/gschedule'
 import { getCurrentMember, hasElevatedAccess } from '@/lib/auth'
-import { checkAiBudget, logAiUsage, budgetExceededMessage } from '@/lib/ai-usage'
+import { checkAiBudget, logAiUsage, budgetExceededMessage, tooManyRecent } from '@/lib/ai-usage'
 
 export const dynamic = 'force-dynamic'
 // A turn can chain several model rounds + tool calls (incl. grounded web
@@ -87,6 +87,13 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'შეტყობინება აუცილებელია.' }, { status: 400 })
   }
   const history = (body.history ?? []).slice(-10)
+
+  if (await tooManyRecent(me.workspace_id, 'chat', 25)) {
+    return NextResponse.json(
+      { error: 'ძალიან ბევრი მოთხოვნა მოვიდა. გთხოვთ, ცოტა ხანში სცადეთ.' },
+      { status: 429 }
+    )
+  }
 
   const budget = await checkAiBudget(me.workspace_id, me.workspace_plan)
   if (!budget.allowed) {

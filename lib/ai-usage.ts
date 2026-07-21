@@ -95,6 +95,24 @@ export async function logAiUsage(params: {
   }
 }
 
+// Simple per-workspace rate limit using the usage log itself: how many calls
+// on this route in the last minute. Returns true if the workspace is over the
+// cap (so the caller should 429 instead of spending on the model).
+export async function tooManyRecent(
+  workspaceId: string,
+  route: string,
+  maxPerMinute: number
+): Promise<boolean> {
+  const since = new Date(Date.now() - 60_000).toISOString()
+  const { count } = await supabase
+    .from('ai_usage')
+    .select('id', { count: 'exact', head: true })
+    .eq('workspace_id', workspaceId)
+    .eq('route', route)
+    .gte('created_at', since)
+  return (count ?? 0) >= maxPerMinute
+}
+
 export function budgetExceededMessage(status: BudgetStatus): string {
   return `ამ თვის AI-ლიმიტი ($${status.limitUsd}) ამოწურულია (გამოყენებულია $${status.usedUsd.toFixed(2)}). ლიმიტი განახლდება მომდევნო თვეში, ან პაკეტის განახლება მოგმართეთ.`
 }
