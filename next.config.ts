@@ -17,6 +17,31 @@ const nextConfig: NextConfig = {
       static: 180,
     },
   },
+
+  // Security headers on every response. (No strict CSP yet — Next's inline
+  // runtime scripts make a locked-down policy easy to break; these headers
+  // cover clickjacking, MIME sniffing, referrer leakage and force HTTPS.)
+  async headers() {
+    return [
+      {
+        source: '/:path*',
+        headers: [
+          { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+          { key: 'X-DNS-Prefetch-Control', value: 'on' },
+          {
+            key: 'Strict-Transport-Security',
+            value: 'max-age=63072000; includeSubDomains; preload',
+          },
+          {
+            key: 'Permissions-Policy',
+            value: 'camera=(), geolocation=(), interest-cohort=()',
+          },
+        ],
+      },
+    ]
+  },
 };
 
 export default nextConfig;

@@ -21,8 +21,9 @@ opportunities, tasks, leads). ეს პირველად.
 | 10 | `10-conversation-lock.sql` | per-conversation lock: conversations.lock_until | ✅ გაშვებული |
 | 11 | `11-knowledge-versions.sql` | knowledge versioning: knowledge_versions ცხრილი | ✅ გაშვებული |
 | 12 | `12-whatsapp-platform.sql` | WhatsApp არხის დაშვება: channel_connections platform check | ⏳ გასაშვები |
+| 13 | `13-enable-rls.sql` | Row Level Security ჩართვა ყველა ცხრილზე (defense-in-depth) | ⏳ გასაშვები |
 
-**ახლა გასაშვები:** `11-knowledge-versions.sql`, `12-whatsapp-platform.sql`
+**ახლა გასაშვები:** `11`, `12`, `13`
 
 ## ახალი მიგრაციის დამატება
 შემდეგი ფაილი `08-<სახელი>.sql`, ცხრილში სტრიქონი დაამატე, გაუშვი Supabase-ში.
