@@ -67,9 +67,18 @@ async function callChat(payload: Record<string, unknown>, attempt = 0): Promise<
     }
 
     if (!res.ok || !data) {
+      // A timeout / gateway error returns non-JSON (data == null) with a 5xx/
+      // 408 status — the turn took too long (usually a heavy request).
+      const timedOut = data == null && [408, 502, 503, 504].includes(res.status)
       if (attempt === 0) {
-        await sleep(700)
+        await sleep(timedOut ? 300 : 700)
         return retry()
+      }
+      if (timedOut) {
+        return {
+          ok: false,
+          text: 'მოთხოვნა გაჭიანურდა — სცადეთ უფრო კონკრეტული ან მოკლე შეკითხვა, ან ხელახლა ცოტა ხანში.',
+        }
       }
       return { ok: false, text: data?.error ?? 'ბოდიში, დროებით ვერ დავამუშავე. სცადეთ ხელახლა.' }
     }
