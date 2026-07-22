@@ -334,7 +334,11 @@ Guidelines:
     // 6 attempts ≈ up to ~15s of backoff — real Gemini 503 spikes routinely
     // outlive the previous 4-attempt/~3.5s window and surfaced as "AI is
     // busy" errors to the user.
-    const MAX_ATTEMPTS = 6
+    // Keep retries short: a 60s Vercel function must not spend ~31s of backoff
+    // on one generate() (6 attempts) and then repeat across tool rounds — that
+    // blows the timeout. 3 attempts (0.5+1+2s) still rides out transient
+    // overload without risking the whole turn.
+    const MAX_ATTEMPTS = 3
     const isOverloaded = (e: unknown) =>
       /503|UNAVAILABLE|overloaded|high demand|429|RESOURCE_EXHAUSTED|rate.?limit/i.test(
         e instanceof Error ? e.message : String(e)
@@ -367,7 +371,7 @@ Guidelines:
           return res
         } catch (e) {
           if (!isOverloaded(e) || attempt === MAX_ATTEMPTS - 1) throw e
-          await new Promise((r) => setTimeout(r, 500 * 2 ** attempt))
+          await new Promise((r) => setTimeout(r, Math.min(2000, 500 * 2 ** attempt)))
         }
       }
       throw new Error('unreachable')

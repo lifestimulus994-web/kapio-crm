@@ -238,7 +238,7 @@ private credentials.`
       e instanceof Error ? e.message : String(e)
     )
   async function ground() {
-    for (let attempt = 0; attempt < 4; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
         return await ai.models.generateContent({
           model: 'gemini-2.5-flash',
@@ -248,8 +248,8 @@ private credentials.`
           config: { tools: [{ googleSearch: {} }] },
         })
       } catch (e) {
-        if (!isOverloaded(e) || attempt === 3) throw e
-        await new Promise((r) => setTimeout(r, 600 * 2 ** attempt))
+        if (!isOverloaded(e) || attempt === 2) throw e
+        await new Promise((r) => setTimeout(r, Math.min(2000, 600 * 2 ** attempt)))
       }
     }
     throw new Error('unreachable')
